@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "贵品风物志｜贵州品牌工作台",
-  description: "以采风、编志、观潮和出山，整理贵州风物的品牌材料。",
+  title: "山风风物志｜采风",
+  description: "从真实材料开始，留下可确认的田野记录。",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
