@@ -1,0 +1,1 @@
+"""MountainLore backend application package."""
