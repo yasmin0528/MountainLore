@@ -1,331 +1,52 @@
-山风风物志：MVP 功能开发 PRD
+# 贵品风物志 P0 最小 MVP 开发计划
 
-版本：v1.0｜日期：2026-08-28｜状态：可开发  
-关联决策：[需求决策记录.md](需求决策记录.md)  
-范围：两天比赛 MVP；PoC 能力不在本期实现。
+## 摘要
 
-1. 目标与成功定义
+完成桌面工作台优先的游客单项目闭环：采风 → 候选确认/编志 → 两条定调路线 → 观潮 → 出山；所有状态持久化至 SQLite，刷新后可恢复。手机号登录、认领与跨端继续不进入本期。
 
-面向山地农产品主理人，将零散的真实输入整理为可确认的品牌档案，并基于选定品牌方向生成公开网络灵感与概念物料。核心流程：采风 → 编志 → 定调 → 观潮 → 出山。
+外部能力采用统一适配器：默认本地演示模式保证无密钥可验证全流程；配置后切换真实模型、搜索与图像服务。未配置实时搜索时只显示“灵感正在积攒中”，不伪造来源或热点。
 
-成功条件：新用户在 2 分钟内完成选品、输入素材并获得首次 AI 回答；可从非标输入走到一条已选品牌路线；所有进入出山的内容只能取自用户确认的档案；每项异步能力的失败都不会丢失已保存进度或被伪装成成功。
+## 关键实现
 
-2. 范围、角色与权限
+- 扩展 SQLite 数据与迁移初始化：项目阶段、游客搜索/生成额度、档案编辑与弃用、品牌路线版本与唯一 current、灵感收藏、生成任务/输入快照/历史产物；游客仅允许一个临时项目，观潮和出山各 2 次，单次出山可额外重生成 1 次。
+- 补齐并统一 REST/SSE 接口：
+  - 项目恢复、编辑、删除与当前阶段查询；
+  - 已确认档案的查询、编辑、弃用，以及仅将 active 档案传入路线和出山；
+  - 两条路线生成、选择、历史版本和只读品牌手册；
+  - 观潮检索、收藏与“用此灵感出山”上下文；
+  - 两种出山模板任务、任务状态查询、SSE 事件重连与历史版本；
+  - 所有写入/任务创建支持 `Idempotency-Key`，统一成功与错误信封。
+- 建立后台 Provider 边界和统一配置。`backend/.env.example` 与设置模块集中定义：
+  - `AI_RUNTIME_MODE=demo|live`
+  - OpenAI-compatible 文本/视觉模型的 base URL、API key、model、timeout；
+  - OpenAI-compatible 图像模型的独立配置；
+  - Tavily 搜索的 key、超时与结果上限。
+  凭证只留在服务端；demo 模式生成明确标注的本地整理/概念 Brief，测试中可注入假 Provider 验证真实成功、超时和失败分支。
+- 将前端拆成按阶段和任务复用的桌面工作台页面：侧栏入口为采风、观潮、出山，底部入口为档案；编志、定调和出山均可从持久化项目重新打开。沿用 `guipin` 的暖纸、靛蓝、苔藓、明黄体系。
+- 复用 `frontend/public/guipin/assets` 的既有 sticker：在选品、档案、路线和本地概念预览中作为产品识别素材；本地预览明确标识“概念稿/非 AI 图像”，不得伪装成实时生成或田野照片。
+- 出山模板固定为：
+  - 周边概念稿：概念预览图或可用素材、文字 Brief；
+  - 小红书图文：3:4 封面/内容图（无图像 Provider 时显示可下载的文字 Brief 与失败原因）、3 个标题、正文和推荐话题。
+- 用后台轻量任务执行器实现 `queued → running → succeeded/failed`，保存失败输入；前端优先 SSE、断开后轮询同一 task，不重复创建或消耗额度。
 
-2.1 范围
+## 接口与行为约束
 
-优先级
-本期实现
-P0
-游客 H5、基础建档、文本/图片采风、2–3 次追问、候选档案确认、三条品牌路线、公开网络观潮、两类出山模板、项目持久化与错误恢复
-P1
-手机验证码登录、游客项目认领、同手机号网页工作台继续编辑
-不做
+- 前端不会接触任何供应商密钥；API 返回统一为 `{ data, request_id }` 或 `{ error: { code, message, field? }, request_id }`。
+- 定调首次与重新生成均固定产生两条路线；重新生成保留旧版本，选择新路线后旧 current 变为 superseded。
+- 观潮成功结果最多两张，必须包含可打开来源链接与发布日期/“时间未知”；没有真实搜索配置、无结果、超时或配额耗尽时进入明确降级状态。
+- 出山输入只取当前路线、active 档案、用户上传素材和显式选中的灵感；被弃用或未确认材料绝不进入请求快照或产物。
+- 不实现 P1 验证码、登录、认领、多人协作、语音、对象存储、队列或自动发布。
 
-语音转写、多人协作、自动发布、计费、多项目、真实小程序、向量数据库、对象存储、任务队列、印刷级包装
+## 验证与质量门槛
 
-2.2 角色
+- 后端 Pytest 覆盖游客恢复与单项目限制、上传限制/失败、2–3 次追问、候选确认/弃用、档案编辑、路线版本、额度与幂等、任务恢复、Provider 成功/超时/失败及权限隔离。
+- 前端执行 lint、类型检查与生产构建；新增浏览器端到端测试覆盖默认 demo 的完整主链、刷新恢复、上传重试、观潮失败与成功桩、额度拦截、两类出山、重生成与历史回看。
+- 以“可操作交互”为统计单位，自动化覆盖不少于 90%；剩余仅限下载行为与浏览器原生文件选择等不可稳定自动化项，手工核验其可访问性、焦点顺序、错误提示和桌面断点布局。
+- 现有后端测试目前因环境缺少 FastAPI 而无法收集；实施第一步安装 `requirements.txt` 依赖并将现有测试恢复为绿色，再开始功能回归。
 
-角色
-权限
-匿名游客
-创建并使用 2 个临时项目；按额度搜索/生成；7 天内可恢复；不可访问他人项目。
-项目拥有者
-认领项目后查看、编辑、确认档案，选择路线、运行检索/生成、删除项目。
-系统 Agent
-仅生成追问、候选内容和任务状态；不能绕过用户确认直接发布/生成营销物料。
+## 已确认的默认决策
 
-3. 信息架构与路由
-
-3.1 H5 底部导航
-
-- 观潮：浏览当前项目的灵感、收藏及“用这个灵感做物料”。
-- 新建品牌档案（中央主按钮）：点击后展开两个选项，一个是新建品牌档案，一个是新建物料（基于已有的品牌档案）
-- 档案：查看已确认的品牌档案、历史物料与同步入口。
-
-五阶段不是五个并列底部入口；网页工作台是侧栏三个入口：采风、观潮、出山。侧栏最下方是档案按钮，点击进去能看品牌档案，再进去可以看品牌档案的资产与历史生成记录。
-
-3.2 页面清单
-
-页面
-关键内容
-核心操作
-欢迎/选品
-预置品类、自定义产品、隐私授权
-创建游客项目
-基础建档
-品牌名、产业、核心产品、产地
-开始采风
-采风访谈
-转录式对话、图片上传、实时笔记、结束入口
-回答、跳过、结束采风
-候选档案确认
-本次解析出的候选卡列表
-确认或弃用每张卡
-档案·品牌资产页
-档案卡片、品牌手册、出山记录
-用户点击档案卡片可以浏览采风后沉淀的信息；点击品牌手册开始生成品牌方案并产出一份类PPT视图；点击出山记录查看过往出山记录。
-观潮
-5~6张灵感卡、来源与发布日期
-收藏、使用灵感、重试
-出山
-模板选择、任务进度、生成结果、历史版本
-生成、重新生成、下载
-登录/认领
-手机号、验证码
-登录并认领
-
-4. 端到端流程
-
-扫码 → 同意隐私/素材授权 → 选品/基础建档 → 采风
-→ 结束 session → 逐张确认候选档案 → 编志查看/编辑
-→ 生成两条路线并选择一条 → 观潮检索/选择灵感
-→ 选择出山模板 → 生成概念物料 → （P1）登录认领、网页继续编辑
-
-任何阶段离开后均以最后一个已完成状态恢复；同一生成任务通过 idempotency key 恢复，不重复扣减游客额度。
-
-5. 功能需求
-
-F-01 游客项目、额度与恢复
-
-1. 扫码后无需登录；服务端创建 visitor_token（HttpOnly Cookie 或安全存储的随机 token）。
-2. 游客最多有一个未认领项目；可从刺梨、酸汤、辣椒、贵州茶、抹茶、蓝莓、猕猴桃选择，或填写自定义产品。
-3. 项目字段“品牌/公司名、所属产业、核心产品、产地”均必填，品牌名不可为空。
-4. 游客配额：2次观潮搜索、2套出山生成、同一出山请求额外重新生成 1 次。服务端原子校验并记录使用量。
-5. 刷新、网络中断或任务处理中重进时恢复项目、阶段与任务状态；不二次扣减配额。
-6. 未认领项目及其本地文件在创建 7 天后删除；认领后转为账号项目并重置游客额度。
-验收： 新设备扫码可在1分钟内看到首次追问；刷新后继续同一项目；超过额度时有明确说明且不发起供应商调用。
-
-F-02 采风
-
-1. 首轮固定收集基础建档；之后 Agent 每次只问一个有信息增量的问题，总共追问 2–3 次。用户可跳过追问。
-2. 输入为文本（最多 2,000 字）和图片（最多 5 张，仅支持ocr读图）；图片先保存，再作为附属素材发送给 Agent。语音入口本期不展示。
-3. Agent 关注品牌起源、产品与工艺、产地环境、人物、地方记忆、真实经历；可以挖掘“非遗/民族文化”故事，不得把用户未说出的内容写为事实。
-4. 每个话题收束后生成不可编辑的 FieldNote，右侧“本次采风笔记”实时展示类型、编号、标题、1–3 句摘要。
-5. 用户可随时“结束本次采风”；Agent 可建议结束但不得强制。结束时展示本次候选档案卡。
-验收： 已答信息不再被重复问；没有碎片化地逐句建卡；只展示 2–3 个追问；图片上传失败可重试且文本记录保留。
-
-F-03 候选档案确认与编志
-
-1. 采风结束后，系统根据 FieldNote 生成候选档案卡：产品、人物、产地、工艺、地方生活方式、品牌记忆或待核实线索。
-2. 候选卡逐张提供 确认 和 弃用。确认时创建 ArchiveCard；弃用只丢弃该候选，不能影响已保存笔记或项目。
-3. 已确认档案支持查看、新增、编辑和弃用；编辑应立即保存并在 UI 显示保存反馈。
-4. 档案卡至少显示卡片类型、标题、正文、关联图片/链接、创建时间和来源简述；对话或上传材料通过链接回跳原始素材。
-5. 只有已确认、未弃用档案能够作为定调和出山的输入。
-验收： 每张候选卡独立确认/弃用；弃用内容不进入路线或物料；编辑后的内容在刷新后仍存在。
-
-F-04 定调与品牌手册
-
-1. 基于已确认档案生成三条差异清晰的路线；每条含目标消费者/场景、品牌一句话、3 个卖点、品牌故事主线、内容语气、视觉关键词、禁用表达。
-2. 用户可并排比较并点击卖点回看关联档案；选择一条为 current。重新生成创建新版本，旧版本可查看但不覆盖。
-3. 当前路线生成只读品牌手册：品牌名、品牌介绍、口号/声音、目标人群/场景、故事主线、卖点、视觉方案。所有文本字段均可编辑。
-4. Logo 与色彩：可上传 Logo；无 Logo 时可展示 AI 概念图或从上传 Logo 提取的候选色彩。无矢量编辑器；所有 AI 图显示“概念稿”。
-验收： 两路线在目标对象、卖点或内容语气上具有可解释的差异；当前路线唯一；重新生成不覆盖历史。
-
-F-05 观潮
-
-1. 已选路线后，按“核心产品 + 产地 + 当前路线/人群”调用公开网络搜索。一次搜索请求最多返回 2 张灵感卡。
-2. 灵感卡显示主题、内容母题、来源链接、发布日期（缺失则“时间未知”）、适配理由及风险提醒。
-3. 用户可收藏灵感或点击“用这个灵感出山做物料”，将灵感 ID 作为出山任务上下文。
-4. 搜索无结果、超时、配额耗尽或供应商失败时，展示“灵感正在积攒中”及重试入口；不显示伪造的缓存或热榜。
-验收： 每张成功结果均能打开来源链接；失败状态不阻塞继续访问档案/定调；游客第二次搜索被拦截且不消耗供应商额度。
-
-F-06 出山
-
-1. 先选择模板：周边概念稿 或 小红书图文，再创建生成任务；一次任务只生成所选模板。
-2. 周边概念稿输出 1 张概念样机和文字 Brief。小红书图文输出封面图 1 张、内容图 1 张、3 个标题、正文和推荐话题；默认画面比例 3:4。
-3. 用户可上传 Logo/素材；没有素材时允许纯文字或通用背景方案。
-4. 生成输入仅包括当前路线、已确认档案、用户可用素材和可选灵感。
-5. 每个任务保留输入快照、状态和产物；游客可额外重新生成一次。
-验收： 不使用弃用档案；生成失败可重试（显示缺省页面）；历史版本可回看且不会覆盖。
-
-F-07 登录、认领与跨端继续（P1）
-
-1. 游客点击同步时输入手机号并获取验证码；同号码 60 秒内不可重复获取。
-2. 短信优先真实发送；演示固定码仅对配置白名单生效，且不得在生产界面明示。
-3. 验证成功后，原 visitor_token 项目原子认领给当前用户；再次认领同项目必须幂等。
-4. 网页端同手机号登录后可查看、编辑同一项目。
-6. 状态机
-
-对象
-状态
-合法转换
-Project
-draft、active、claimed、expired、deleted
-创建→draft；开始采风→active；登录认领→claimed；7 天未认领→expired；拥有者删除→deleted
-FieldworkSession
-active、finishing、completed
-新建→active；点击结束→finishing；候选卡生成完成→completed
-CandidateArchiveCard
-pending、confirmed、discarded
-生成→pending；确认→confirmed；弃用→discarded
-ArchiveCard
-active、discarded
-候选确认→active；用户弃用→discarded
-BrandDirection
-draft、current、superseded
-生成→draft；选择→current；新方向被选择后旧 current→superseded
-AsyncTask
-queued、running、succeeded、failed、cancelled
-创建→queued→running；完成/失败/取消；失败允许新任务重试
-
-7. 数据模型
-
-SQLite 使用 UUID 主键、ISO 8601 UTC 时间、软删除字段（素材文件在删除时物理清理）。
-
-实体
-关键字段
-关系
-Visitor
-id、token_hash、expires_at、search_used、generation_used、regeneration_used
-1:1 临时 Project
-User
-id、phone_hash、phone_masked、created_at
-1:N Project
-Project
-id、visitor_id?、owner_id?、brand_name、industry、core_product、origin、status、current_direction_id?
-1:N Session/Card/Direction/Task
-MediaAsset
-id、project_id、storage_key、mime_type、kind、original_name、created_at
-关联 Note/Card/Task
-FieldworkSession
-id、project_id、sequence、status、started_at、ended_at
-1:N Message/FieldNote
-ConversationMessage
-id、session_id、role、content、sequence、created_at
-访谈记录
-FieldNote
-id、session_id、type、title、summary、media_asset_id?、sequence
-可产生候选卡
-CandidateArchiveCard
-id、project_id、field_note_ids_json、type、title、content、status
-确认后创建 ArchiveCard
-ArchiveCard
-id、project_id、type、title、content、source_summary、asset_ids_json、status
-定调/出山输入
-BrandDirection
-id、project_id、version、content_json、status
-当前路线唯一
-Insight
-id、project_id、title、theme、source_url、published_at?、fit_reason、saved_at?
-可作为 Task 上下文
-GenerationTask
-id、project_id、kind、input_snapshot_json、status、output_json、error_code?、idempotency_key
-产物版本
-
-8. API 与 SSE 契约
-
-所有写接口返回 { data, request_id }；校验失败返回 { error: { code, message, field? }, request_id }。服务端凭证不得下发前端。
-
-方法
-路径
-作用
-POST
-/api/visitors
-创建/恢复匿名访问者
-POST
-/api/projects
-创建基础项目
-GET/PATCH
-/api/projects/:id
-读取/更新基础字段和阶段
-POST
-/api/media
-上传图片；校验数量、大小、MIME
-POST
-/api/sessions
-开始采风 session
-POST
-/api/sessions/:id/messages
-保存用户回答并创建追问任务
-POST
-/api/sessions/:id/finish
-结束采风，创建候选档案任务
-GET
-/api/projects/:id/candidates
-获取待确认卡
-POST
-/api/candidates/:id/confirm / discard
-确认或弃用候选卡
-GET/PATCH
-/api/projects/:id/archive-cards
-档案查询/编辑
-POST
-/api/projects/:id/directions
-生成两条路线
-POST
-/api/directions/:id/select
-选择当前路线
-POST
-/api/projects/:id/insights/search
-运行唯一一次观潮搜索
-POST
-/api/projects/:id/generations
-创建出山任务
-GET
-/api/tasks/:id/events
-SSE：queued/running/progress/succeeded/failed
-POST
-/api/auth/sms、/verify、/claim
-P1 验证、登录与项目认领
-
-写入与任务创建使用 Idempotency-Key；重复 key 返回同一任务。SSE 断开后客户端以任务 ID 轮询或重连，不能重新发起生成。
-
-9. 异常、降级与安全
-
-场景
-行为
-模型/搜索/图像超时
-标记任务 failed，保留输入和已保存内容；显示重试。
-搜索无结果
-显示“灵感正在积攒中”，不伪造结果。
-图像失败
-提供实时生成的文字 Brief；不使用预制图冒充生成。
-上传失败
-显示每个文件失败原因与重试；不清除已成功文件。
-刷新/断网
-从服务端阶段和任务恢复；后台任务按 idempotency key 去重。
-无权限/额度耗尽
-返回明确错误，前端禁用对应操作，不调用外部供应商。
-删除项目
-二次确认；删除记录、本地素材和派生产物；移除访问权限。
-敏感信息
-上传前提示；前端基础校验并在展示中遮蔽明显身份证/精确住址；不将其用于生成。
-
-公开演示不得使用未授权的人物照片、录音或可识别个人信息；样例必须自有、获授权、去标识化或为 AI 生成。
-
-10. 埋点
-
-事件
-必填属性
-project_created
-product_category、is_custom、visitor_or_user
-fieldwork_started/completed
-project_id、session_sequence、duration_sec、notes_count
-followup_answered/skipped
-session_id、question_index、topic
-candidate_confirmed/discarded
-candidate_type、session_id
-direction_generated/selected
-version、direction_index
-insight_search_started/succeeded/failed
-provider、result_count、latency_ms、error_code?
-generation_started/succeeded/failed
-template_kind、has_uploaded_asset、latency_ms、error_code?
-project_claimed
-claim_source、elapsed_since_create
-
-禁止上传完整正文、手机号、原始图片 URL、精确地址或敏感文本到分析系统。
-
-11. 验收用例
-
-1. 新游客创建项目、输入文字并上传最多 5 张图片，2 分钟内收到首次追问。
-2. 采风每次只出现一个问题、总追问 2–3 个；结束后可逐张确认或弃用候选卡。
-3. 未确认/已弃用内容在路线、观潮上下文和出山输入中均不可见。
-4. 生成两条路线，选择其一并重新生成后旧版仍可查看。
-5. 首次观潮返回最多 2 张有可打开来源的卡；第二次游客搜索被限制。
-6. 两种出山模板分别只输出规定物料；无图像能力时交付文字 Brief 并标识失败原因。
-7. 刷新正在执行的任务后可恢复结果且额度不重复消耗。
-8. P1 启用时，白名单与真实验证码均可认领项目；60 秒限流有效；网页端可见同一项目。
-9. 删除项目后本地素材与派生物不可再访问。
-10. 在微信内置浏览器、常见手机尺寸和桌面端完成主链路；键盘焦点、上传错误和任务状态可访问。
+- 桌面工作台优先，手机端保持基础可访问和单列可用，不单独实现完整 H5 底部导航体验。
+- P0 仅游客匿名项目；游客观潮与出山各 2 次，同一出山任务允许额外重生成 1 次。
+- 默认 demo 适配器可验证闭环；真实模型、视觉、图像与 Tavily 搜索均通过统一环境配置启用。
+- 定调始终比较两条品牌路线。
