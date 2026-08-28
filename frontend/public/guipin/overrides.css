@@ -1,0 +1,16 @@
+/* Small post-QA safeguards for inline SVG actions. */
+.chain-card footer button,
+.asset-note button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chain-card footer .icon,
+.asset-note .icon {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+}

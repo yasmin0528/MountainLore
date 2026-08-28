@@ -1,0 +1,23 @@
+/* Generated collage used only as a few tactile inserts, never as a page-wide decoration. */
+.story-card:after {
+  right: -9px;
+  bottom: -18px;
+  width: 220px;
+  height: 165px;
+  border: 0;
+  border-radius: 0;
+  transform: rotate(-2deg);
+  opacity: .93;
+  background: url("assets/indigo-paper-collage-v1.png") left center / cover no-repeat;
+  clip-path: polygon(5% 2%, 98% 0, 100% 91%, 88% 100%, 0 95%, 2% 14%);
+  z-index: 0;
+  pointer-events: none;
+}
+.story-head, .story-box, .story-bottom { position: relative; z-index: 1; }
+.dong-cloth {
+  background-color: #154f68;
+  background-image: linear-gradient(90deg, rgba(11,56,76,.12), transparent 60%), url("assets/indigo-paper-collage-v1.png");
+  background-size: 100% 100%, cover;
+  background-position: center, left center;
+  background-repeat: no-repeat;
+}

@@ -22,11 +22,11 @@ python -m pip install -r requirements.txt -i https://pypi.org/simple
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The API will be available at `http://localhost:8000`. Interactive documentation is at `http://localhost:8000/docs` and the health endpoint is `GET /api/v1/health`.
+The API will be available at `http://localhost:8000`. Interactive documentation is at `http://localhost:8000/docs` and the health endpoint is `GET /api/health`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust values as needed. The frontend development servers at ports 3000 are allowed by default.
+Copy `.env.example` to `.env` and adjust values as needed. The frontend development servers at ports 3000 are allowed by default, including `http://172.24.192.1:3000` for LAN development.
 
 ## Test
 

@@ -1,0 +1,6 @@
+/* Keep the batik motif as a tactile accent, not a competing information layer. */
+.chain-card {
+  background-repeat: repeat, no-repeat, repeat;
+  background-size: 8px 8px, 160px 160px, 100% 100%;
+  background-position: 0 0, right 18px top 16px, 0 0;
+}
