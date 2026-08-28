@@ -1,0 +1,68 @@
+/* Final material rule: no CSS gradients. Tactility comes from paper and cloth images only. */
+.shell,
+.shell *,
+.shell *::before,
+.shell *::after {
+  background-image: none !important;
+}
+
+.shell .paper-noise,
+.shell .right-rail,
+.shell .rail-note,
+.shell .paper-card,
+.shell .archive-card,
+.shell .chain-card,
+.shell .asked-card,
+.shell .chat-sheet,
+.shell .trend,
+.shell .asset-hero,
+.shell .asset-main,
+.shell .field-form,
+.shell .brand-folder,
+.shell .story-box,
+.shell .story-scrap,
+.shell .nav-row {
+  background-image: var(--paper-grain) !important;
+  background-size: 180px 180px !important;
+}
+
+.shell .sidebar {
+  background-color: #0d4660;
+  background-image: url("assets/indigo-paper-collage-v1.png") !important;
+  background-size: auto 100% !important;
+  background-position: left top !important;
+  background-repeat: no-repeat !important;
+  box-shadow: 7px 0 20px rgba(22,45,48,.17);
+}
+.shell .sidebar::after {
+  right: -2px;
+  width: 25px;
+  opacity: 1;
+  background-image: url("assets/indigo-paper-collage-v1.png") !important;
+  background-size: auto 1024px !important;
+  background-position: -160px 0 !important;
+  background-repeat: no-repeat !important;
+}
+.shell .archive-nav {
+  background-color: #365b48;
+  background-image: var(--cloth-grain) !important;
+  background-size: 150px 150px !important;
+}
+.shell .story-card {
+  background-color: #0f4a63;
+  background-image: var(--cloth-grain) !important;
+  background-size: 150px 150px !important;
+}
+.shell .story-card::after {
+  background-image: url("assets/indigo-paper-collage-v1.png") !important;
+  background-size: cover !important;
+  background-position: left center !important;
+  background-repeat: no-repeat !important;
+}
+.shell .dong-cloth {
+  background-color: #154f68;
+  background-image: url("assets/indigo-paper-collage-v1.png") !important;
+  background-size: cover !important;
+  background-position: left center !important;
+  background-repeat: no-repeat !important;
+}
