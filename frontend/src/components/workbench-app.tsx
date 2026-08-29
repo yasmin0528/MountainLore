@@ -28,6 +28,7 @@ type TideRefreshState = { status: "idle" | "running" | "succeeded" | "partial" |
 type TideReport = { edition: { id: string; scope: "shared" | "personal"; status: "succeeded" | "partial"; completed_at?: string; is_fallback?: boolean; ideas: TideReportIdea[] } | null; latest_attempt: { status: string; error_code?: string; completed_at?: string } | null; refresh_state: TideRefreshState; preview_sources?: TideReportSource[]; next_refresh_at: string };
 export type Job = { id: string; template_type: string; status: string; result: Record<string, unknown>; error_code?: string; regeneration_used: number };
 type GenerationPreview = { id: string; template_type: "peripheral" | "xiaohongshu"; status: string; inspiration_text: string; result: Record<string, unknown> };
+type GenerationOverlayKind = "manual" | "manual_asset" | "launch";
 export type Workspace = { project: Project; session?: Session | null; archive_cards: ArchiveCard[]; claims?: Claim[]; directions: Direction[]; tasks?: WorkflowTask[]; manual?: { content: Record<string, unknown>; current_version_id?: string }; manual_versions?: ManualVersion[]; manual_assets?: ManualAsset[]; exports?: Array<{ id: string; format: string; download_url?: string }>; shares?: Array<{ id: string; revoked_at?: string; created_at: string }>; tide_searches: Tide[]; generation_jobs: Job[] };
 type Screen = "setup" | "interview" | "candidates" | "project-directory" | "archive" | "assets" | "chronicle" | "directions" | "manual" | "tide" | "launch";
 type SetupForm = { brand_name: string; industry: string; core_product: string; origin: string; category: string; consent: boolean };
@@ -107,6 +108,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const [answer, setAnswer] = useState("");
   const [uploads, setUploads] = useState<Array<{ id: string; file: File; status: "uploading" | "ready" | "failed"; assetId?: string; error?: string }>>([]);
   const [busy, setBusy] = useState(false);
+  const [generationOverlay, setGenerationOverlay] = useState<GenerationOverlayKind | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [launchInspiration, setLaunchInspiration] = useState<Inspiration | null>(null);
@@ -195,6 +197,13 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const latestRouteTask = workspace?.tasks?.find((item) => item.kind === "route_generation");
   const latestLogoTask = workspace?.tasks?.find((item) => item.kind === "logo_generation");
   const latestPatternTask = workspace?.tasks?.find((item) => item.kind === "manual_asset_generation");
+
+  useEffect(() => {
+    if (!generationOverlay || busy) return;
+    const taskKinds = generationOverlay === "manual" ? ["route_generation", "manual_generation"] : generationOverlay === "manual_asset" ? ["logo_generation", "manual_asset_generation"] : [];
+    const taskIsActive = taskKinds.some((kind) => workspace?.tasks?.some((item) => item.kind === kind && ["queued", "running"].includes(item.status)));
+    if (!taskIsActive) setGenerationOverlay(null);
+  }, [busy, generationOverlay, workspace?.tasks]);
 
   useEffect(() => {
     if (!activeWorkflowTask || demoMode || !project) return;
@@ -357,11 +366,11 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
 
   async function deleteCard(card: ArchiveCard): Promise<boolean> { if (demoMode) { setWorkspace((current) => current ? { ...current, archive_cards: current.archive_cards.filter((item) => item.id !== card.id) } : current); return true; } setBusy(true); setError(null); try { await api(`/archive-cards/${card.id}`, { method: "DELETE" }); await refreshWorkspace(); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
   async function saveCard(card: ArchiveCard): Promise<boolean> { if (demoMode) { setWorkspace((current) => current ? { ...current, archive_cards: current.archive_cards.map((item) => item.id === card.id ? { ...card, content_version: item.content_version + 1, updated_at: new Date().toISOString() } : item) } : current); return true; } setBusy(true); setError(null); try { await api(`/archive-cards/${card.id}`, { method: "PATCH", body: JSON.stringify({ title: card.title, content: card.content, expected_content_version: card.content_version }) }); await refreshWorkspace(); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
-  async function createDirections(preferences?: ManualVisualPreferences) { if (!project) return; if (demoMode) { setScreen("manual"); return; } setBusy(true); setError(null); try { await api(`/projects/${project.id}/directions`, { method: "POST", headers: { "Idempotency-Key": createRequestId("directions") }, body: JSON.stringify({ visual_preferences: preferences ?? {} }) }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
+  async function createDirections(preferences?: ManualVisualPreferences) { if (!project) return; if (demoMode) { setScreen("manual"); return; } setGenerationOverlay("manual"); setBusy(true); setError(null); try { await api(`/projects/${project.id}/directions`, { method: "POST", headers: { "Idempotency-Key": createRequestId("directions") }, body: JSON.stringify({ visual_preferences: preferences ?? {} }) }); await refreshWorkspace(); } catch (caught) { setGenerationOverlay(null); setError(errorText(caught)); } finally { setBusy(false); } }
   async function confirmChronicle() { if (!project) return; if (demoMode) { setScreen("chronicle"); return; } setBusy(true); setError(null); try { await api(`/projects/${project.id}/chronicle/confirm`, { method: "POST", headers: { "Idempotency-Key": `chronicle-${project.id}` }, body: JSON.stringify({ request_id: "initial", defer_directions: true }) }); await refreshWorkspace(); setScreen("chronicle"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
   async function saveManual(content: Record<string, unknown>) { if (!project) return; if (demoMode) { setWorkspace((current) => current ? { ...current, manual: { ...(current.manual ?? {}), content } } : current); return; } setBusy(true); setError(null); try { await api(`/projects/${project.id}/brand-manual`, { method: "PATCH", body: JSON.stringify({ content_json: content }) }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
-  async function retryTask(id: string) { try { await api(`/tasks/${id}/retry`, { method: "POST" }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } }
-  async function generateManualAsset(kind: "extension_pattern" | "packaging_key_visual") { if (!project || demoMode) return; try { await api(`/projects/${project.id}/brand-manual/generate-assets/${kind}`, { method: "POST", headers: { "Idempotency-Key": createRequestId(`asset-${kind}`) } }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } }
+  async function retryTask(id: string) { const task = workspace?.tasks?.find((item) => item.id === id); const overlay = task?.kind === "route_generation" || task?.kind === "manual_generation" ? "manual" : task?.kind === "logo_generation" || task?.kind === "manual_asset_generation" ? "manual_asset" : null; if (overlay) setGenerationOverlay(overlay); setBusy(true); try { await api(`/tasks/${id}/retry`, { method: "POST" }); await refreshWorkspace(); } catch (caught) { setGenerationOverlay(null); setError(errorText(caught)); } finally { setBusy(false); } }
+  async function generateManualAsset(kind: "extension_pattern" | "packaging_key_visual") { if (!project || demoMode) return; setGenerationOverlay("manual_asset"); setBusy(true); try { await api(`/projects/${project.id}/brand-manual/generate-assets/${kind}`, { method: "POST", headers: { "Idempotency-Key": createRequestId(`asset-${kind}`) } }); await refreshWorkspace(); } catch (caught) { setGenerationOverlay(null); setError(errorText(caught)); } finally { setBusy(false); } }
   async function selectDirection(id: string): Promise<boolean> { if (demoMode) { setWorkspace((current) => current ? { ...current, project: { ...current.project, current_direction_id: id, status: "manual_ready" }, directions: current.directions.map((route) => ({ ...route, state: route.id === id ? "current" : "draft" })) } : current); setScreen("manual"); return true; } setBusy(true); setError(null); try { await api(`/directions/${id}/select`, { method: "POST", headers: { "Idempotency-Key": `manual-${id}` } }); await refreshWorkspace(); setScreen("manual"); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
   async function favoriteTideIdea(id: string) { if (!project) return; setBusy(true); setError(null); try { const response = await api<{ data: { favorite: number } }>(`/projects/${project.id}/tide-report-ideas/${id}/favorite`, { method: "POST" }); setTideReport((current) => current?.edition ? { ...current, edition: { ...current.edition, ideas: current.edition.ideas.map((idea) => idea.id === id ? { ...idea, favorite: response.data.favorite } : idea) } } : current); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
   async function useTideIdea(idea: TideReportIdea) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/tide-report-ideas/${idea.id}/use`, { method: "POST" }); const source = idea.sources[0]; setLaunchInspiration({ id: idea.id, theme: idea.theme, content_motif: idea.content_motif, source_url: source?.source_url ?? "", source_title: source?.source_title ?? idea.theme, published_at: source?.published_at, fit_reason: idea.applicable_scene, risk_note: idea.risk_note, favorite: idea.favorite }); setLaunchArchiveId(null); setGenerationPreview(null); setScreen("launch"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
@@ -409,7 +418,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     if (!launchPrompt.trim()) { setError("先写下一句灵感或你希望被看见的画面。"); return; }
     const requestPrompt = launchPrompt.trim();
     const materialIds = launchType === "peripheral" ? selectedLaunchMaterials.map((item) => item.id) : [];
-    setBusy(true); setError(null);
+    setGenerationOverlay("launch"); setBusy(true); setError(null);
     try {
       if (demoMode) {
         setGenerationPreview({ id: `demo-preview-${Date.now()}`, template_type: launchType, status: "succeeded", inspiration_text: requestPrompt, result: launchType === "peripheral" ? { brief: `模拟预览：以“${requestPrompt}”为起点，组织一张暖纸、靛蓝布纹与刺梨果实并置的周边概念稿。`, concept_title: selectedLaunchMaterials.map((item) => item.label).join("、"), materials: ["磨砂纸材", "靛蓝布纹标签", "明黄封签"], image: { kind: "url", value: "/guipin/assets/sticker-cili.png" } } : { brief: `模拟预览：把“${requestPrompt}”变成一组可以继续讨论的图文叙事。`, titles: ["把山风带进冰箱", "这一口酸得很清醒", "从赫章寄来的夏日"], body: "一口清酸，像把山地的风留在今天。", hashtags: ["#贵州风物", "#刺梨原汁"], image: { kind: "url", value: "/guipin/assets/sticker-cili.png" } } });
@@ -418,7 +427,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       const response = await api<{ data: GenerationPreview }>(`/projects/${project.id}/generation-previews`, { method: "POST", body: JSON.stringify({ template_type: launchType, inspiration_text: requestPrompt, inspiration_card_id: launchInspiration?.id, material_ids: materialIds }) });
       setGenerationPreview(response.data.status === "succeeded" ? response.data : await waitForGenerationPreview(response.data.id));
     } catch (caught) { setError(errorText(caught)); }
-    finally { setBusy(false); }
+    finally { setGenerationOverlay(null); setBusy(false); }
   }
   async function saveLaunchPreview() {
     if (!generationPreview) return;
@@ -490,7 +499,22 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       {deleteTarget && <DeleteProjectDialog project={deleteTarget} busy={busy} onClose={() => setDeleteTarget(null)} onConfirm={() => { const target = deleteTarget; setDeleteTarget(null); void deleteProject(target); }} />}
       {deleteCardTarget && workspace?.project && <DeleteProjectDialog project={workspace.project} subject={deleteCardTarget.title} description="删除后，这张档案卡将从品牌资料中移除，但采风对话、笔记和来源记录会保留。" confirmLabel="确认删除卡片" keepLabel="保留卡片" busy={busy} onClose={() => setDeleteCardTarget(null)} onConfirm={() => { const target = deleteCardTarget; setDeleteCardTarget(null); void deleteCard(target); }} />}
       {!project && screen !== "setup" && screen !== "project-directory" && <Empty title={screen === "tide" ? "先完成采风并确认档案，才能开始真实观潮" : screen === "launch" ? "先完成采风并确认档案，才能生成出山概念稿" : "先建立品牌档案"} action={() => setScreen("setup")} actionLabel="去采风" />}
+      {generationOverlay && <GenerationLoading kind={generationOverlay} />}
     </main><FailureToast message={error} onDismiss={() => setError(null)} />
+  </div>;
+}
+
+function GenerationLoading({ kind }: { kind: GenerationOverlayKind }) {
+  const content = kind === "launch"
+    ? { eyebrow: "出山产物生成中", title: "正在把风物带到眼前", copy: "正在整理文案与画面，请稍候。" }
+    : kind === "manual_asset"
+      ? { eyebrow: "品牌手册生成中", title: "正在绘制视觉资产", copy: "正在提炼品牌的图形与色彩语言。" }
+      : { eyebrow: "品牌手册生成中", title: "正在凝练品牌方向", copy: "正在依据已确认的品牌资料生成手册底稿。" };
+  return <div className="generation-loading" role="status" aria-live="polite" aria-label={content.title}>
+    <div className="generation-loading-card">
+      <div className="generation-spinner" aria-hidden="true"><i /><i /><b>贵</b></div>
+      <p className="eyebrow">{content.eyebrow}</p><h2>{content.title}</h2><p>{content.copy}</p>
+    </div>
   </div>;
 }
 
