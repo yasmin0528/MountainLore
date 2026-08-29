@@ -219,3 +219,10 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 .delete-project-confirm:focus-visible{outline:3px solid color-mix(in srgb,var(--rose) 30%,transparent);outline-offset:2px}
 .delete-project-confirm:disabled{background:var(--paper-muted);border-color:var(--border-soft);color:var(--muted);cursor:not-allowed}
 @media(max-width:620px){.delete-project-dialog{width:calc(100vw - 24px);padding:22px 20px 18px}.delete-project-dialog>footer{flex-direction:column-reverse;align-items:stretch}.delete-project-dialog>footer button{width:100%}}
+
+/* 档案卡只在左侧切换；编辑态就在当前纸页内完成。 */
+.folio-sheet-stack{margin-top:20px}.folio-sheet footer{justify-content:flex-start;gap:10px;padding-top:10px;border-top:1px dashed #d7c9ad}.folio-sheet.is-editing{padding-top:43px}.folio-edit-title,.folio-edit-content{display:block}.folio-edit-title input,.folio-edit-content textarea{width:100%;border:0;border-bottom:1px solid #b9ad91;background:rgba(255,253,246,.72);color:var(--ink);font-family:var(--font-display),serif;outline:none}.folio-edit-title input{margin:0 0 15px;padding:0 0 8px;font-size:29px;font-weight:600;letter-spacing:-.035em}.folio-edit-content textarea{min-height:112px;padding:4px 0;resize:vertical;font-size:17px;line-height:1.76}.folio-edit-title input:focus-visible,.folio-edit-content textarea:focus-visible{outline:3px solid rgba(15,74,99,.22);outline-offset:3px}.folio-save-button{min-height:34px;margin-left:auto;padding:7px 12px;font-size:11px}
+@media(max-width:760px){.folio-sheet-stack{margin-top:15px}.folio-edit-title input{font-size:24px}.folio-edit-content textarea{min-height:132px;font-size:16px}.folio-save-button{min-height:38px}}
+/* 档案页脚与纸面分隔线共用同一左基线；保存使用紧凑主操作。 */
+.folio-sheet footer .text-button{min-height:28px;padding:0;font-size:11px;line-height:1.45}.folio-save-button{min-height:30px;padding:5px 10px;border-color:var(--indigo);border-radius:2px;background:var(--indigo);color:var(--ink-inverse);font-size:11px;line-height:1.35}.folio-save-button:hover:not(:disabled){background:var(--indigo-deep)}
+@media(max-width:760px){.folio-sheet footer .text-button{min-height:30px}.folio-save-button{min-height:32px;padding:6px 10px}}
