@@ -81,6 +81,9 @@ def test_tide_report_api_favorite_use_and_generation_snapshot(tmp_path: Path, mo
     refresh_weekly_tide_report(datetime(2026, 8, 31, 9, tzinfo=SHANGHAI))
     monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
     with TestClient(app) as client:
+        sample = client.get("/api/tide-report/sample").json()["data"]
+        assert sample["edition"]["week_key"] == "2026-08-31"
+        assert len(sample["edition"]["ideas"]) == 6
         project_id = _seed_positioned_project(client)
         report = client.get(f"/api/projects/{project_id}/tide-report").json()["data"]
         idea_id = report["edition"]["ideas"][0]["id"]
@@ -149,6 +152,7 @@ def test_tavily_candidates_cover_each_source_group_and_deduplicate(monkeypatch) 
     monkeypatch.setattr(settings, "tavily_api_key", "tavily-key")
     monkeypatch.setattr(settings, "tide_search_provider", "tavily")
     monkeypatch.setattr(settings, "tavily_max_results_per_query", 3)
+    monkeypatch.setattr(provider, "_latest_public_source_candidates", lambda: [])
     calls: list[str] = []
 
     def _search(query):

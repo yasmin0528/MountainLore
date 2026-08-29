@@ -144,7 +144,7 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS tide_report_sources (
               id TEXT PRIMARY KEY, edition_id TEXT NOT NULL, channel TEXT NOT NULL,
               publisher TEXT NOT NULL, source_url TEXT NOT NULL, source_title TEXT NOT NULL,
-              published_at TEXT, captured_at TEXT NOT NULL
+              published_at TEXT, source_excerpt TEXT NOT NULL DEFAULT '', captured_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS tide_report_ideas (
               id TEXT PRIMARY KEY, edition_id TEXT NOT NULL, theme TEXT NOT NULL,
@@ -183,6 +183,7 @@ def initialize_database() -> None:
         _ensure_column(connection, "archive_cards", "updated_at", "TEXT")
         _ensure_column(connection, "archive_cards", "content_version", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(connection, "archive_cards", "source_summary", "TEXT")
+        _ensure_column(connection, "tide_report_sources", "source_excerpt", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "media_assets", "kind", "TEXT NOT NULL DEFAULT 'upload'")
         _ensure_column(connection, "media_assets", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(connection, "tasks", "input_snapshot_json", "TEXT NOT NULL DEFAULT '{}'")

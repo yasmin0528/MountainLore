@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -24,6 +25,7 @@ _ALLOWED_HOSTS = {
     "foodaily.com": ("industry", "Foodaily"),
     "foodinc.com.cn": ("industry", "小食代"),
     "tidesight.com": ("industry", "观潮新消费"),
+    "pai.com.cn": ("industry", "电商派"),
     "36kr.com": ("industry", "36氪"),
     "xiaohongshu.com": ("xiaohongshu", "小红书公开帖"),
     "douyin.com": ("douyin", "抖音公开趋势"),
@@ -43,6 +45,7 @@ class VerifiedSource:
     publisher: str
     source_title: str
     published_at: str | None
+    source_excerpt: str = ""
 
 
 def china_now() -> datetime:
@@ -113,6 +116,13 @@ def _metadata_from_html(html: str) -> tuple[str | None, str | None]:
     return title, None
 
 
+def _article_text_from_html(html: str) -> str:
+    content = re.sub(r"<(?:script|style|svg|noscript)[^>]*>[\s\S]*?</(?:script|style|svg|noscript)>", " ", html, flags=re.I)
+    blocks = re.findall(r"<(?:p|h[1-4]|li)[^>]*>([\s\S]*?)</(?:p|h[1-4]|li)>", content, flags=re.I)
+    text = " ".join(re.sub(r"<[^>]+>", " ", block) for block in (blocks or [content]))
+    return re.sub(r"\s+", " ", text).strip()[:1600]
+
+
 def verify_weekly_source(candidate: WeeklyTideSource) -> VerifiedSource | None:
     if not is_allowed_source_url(candidate.url):
         return None
@@ -127,7 +137,8 @@ def verify_weekly_source(candidate: WeeklyTideSource) -> VerifiedSource | None:
     allowed = _allowed_host(parsed.hostname or "") if parsed.scheme == "https" else None
     if not allowed:
         return None
-    title, captured_date = _metadata_from_html(response.text[:250_000])
+    page_html = response.text[:250_000]
+    title, captured_date = _metadata_from_html(page_html)
     channel, publisher = allowed
     if candidate.channel in {"xiaohongshu", "douyin"} and candidate.channel != channel:
         return None
@@ -138,6 +149,7 @@ def verify_weekly_source(candidate: WeeklyTideSource) -> VerifiedSource | None:
         publisher=publisher,
         source_title=title or candidate.title,
         published_at=captured_date or candidate.published_at,
+        source_excerpt=_article_text_from_html(page_html) or candidate.body_excerpt,
     )
 
 
@@ -197,10 +209,10 @@ def refresh_weekly_tide_report(at: datetime | None = None) -> dict[str, Any]:
     try:
         candidates = provider.weekly_tide_candidates()
         verified_by_url: dict[str, VerifiedSource] = {}
-        for candidate in candidates:
-            verified = verify_weekly_source(candidate)
-            if verified:
-                verified_by_url.setdefault(verified.source_url, verified)
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for verified in executor.map(verify_weekly_source, candidates):
+                if verified:
+                    verified_by_url.setdefault(verified.source_url, verified)
         if len(verified_by_url) < 5:
             raise ProviderError("insufficient_verified_sources", "本周可访问的公开来源不足")
         with connect() as connection:
@@ -208,14 +220,18 @@ def refresh_weekly_tide_report(at: datetime | None = None) -> dict[str, Any]:
             for verified in verified_by_url.values():
                 source_id = new_id()
                 connection.execute(
-                    "INSERT INTO tide_report_sources VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (source_id, edition_id, verified.channel, verified.publisher, verified.source_url, verified.source_title, verified.published_at, now()),
+                    """INSERT INTO tide_report_sources
+                       (id, edition_id, channel, publisher, source_url, source_title, published_at, source_excerpt, captured_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (source_id, edition_id, verified.channel, verified.publisher, verified.source_url, verified.source_title,
+                     verified.published_at, verified.source_excerpt, now()),
                 )
                 source_ids_by_url[verified.source_url] = source_id
                 source_ids_by_url[verified.original_url] = source_id
         source_context = [
-            {"url": source.source_url, "channel": source.channel, "publisher": source.publisher, "title": source.source_title, "published_at": source.published_at}
-            for source in verified_by_url.values()
+            {"url": source.source_url, "channel": source.channel, "publisher": source.publisher, "title": source.source_title,
+             "published_at": source.published_at, "article_excerpt": source.source_excerpt}
+            for source in list(verified_by_url.values())[:8]
         ]
         ideas = _validate_ideas(provider.weekly_tide_ideas(source_context, upcoming_holidays(at)), source_ids_by_url)
         if not 5 <= len(ideas) <= 6:

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -47,6 +48,7 @@ class WeeklyTideSource:
     publisher: str
     title: str
     published_at: str | None
+    body_excerpt: str = ""
 
 
 @dataclass
@@ -78,6 +80,10 @@ _TAVILY_WEEKLY_QUERIES = (
     TavilyWeeklyQuery("douyin.com", "douyin", "抖音公开趋势", "近30天 餐饮 新消费 热议 趋势 site:douyin.com"),
 )
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
+_FIRST_PARTY_WEEKLY_LISTINGS = (
+    ("https://www.canyin88.com/zixun/", "industry", "红餐网", r'href=["\']([^"\']*/zixun/20\d{2}/\d{1,2}/\d{1,2}/\d+\.html)'),
+    ("https://www.tidesight.com/news/", "industry", "观潮新消费", r'href=["\'](https?://[^"\']+/news/\d+\.html)'),
+)
 
 
 def _json_from_content(content: str) -> dict[str, Any]:
@@ -185,6 +191,7 @@ class CreditsProvider:
 
     def tide_chat_json(
         self, *, model: str, instruction: str, context: dict[str, Any], temperature: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         """Run the weekly report through its isolated search/synthesis provider."""
         return self._chat_json(
@@ -195,6 +202,7 @@ class CreditsProvider:
             api_key=settings.tide_api_key,
             missing_key_message="请先配置 TIDE_API_KEY",
             temperature=temperature,
+            timeout=httpx.Timeout(timeout_seconds) if timeout_seconds else None,
         )
 
     def _chat_json(
@@ -229,8 +237,7 @@ class CreditsProvider:
         if temperature is not None:
             payload["temperature"] = temperature
         try:
-            client_timeout = self.timeout if timeout is _DEFAULT_REQUEST_TIMEOUT else timeout
-            with httpx.Client(timeout=client_timeout) as client:
+            with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
                     f"{base_url.rstrip('/')}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -296,8 +303,12 @@ class CreditsProvider:
             raise ProviderError("tide_search_provider_unsupported", "当前仅支持 Tavily 作为观潮联网检索服务", retriable=False)
         if not settings.tavily_api_key:
             raise ProviderError("tavily_not_configured", "请先配置 TAVILY_API_KEY", retriable=False)
-        sources: list[WeeklyTideSource] = []
+        sources = self._latest_public_source_candidates()
         seen_urls: set[str] = set()
+        for source in sources:
+            seen_urls.add(source.url)
+        if len(sources) >= 10:
+            return sources
         for search_query in _TAVILY_WEEKLY_QUERIES:
             if len(sources) >= settings.tide_source_max_results:
                 break
@@ -319,11 +330,37 @@ class CreditsProvider:
                     publisher=search_query.publisher,
                     title=str(raw.get("title") or "未命名来源").strip(),
                     published_at=str(published_at) if published_at else None,
+                    body_excerpt=str(raw.get("raw_content") or raw.get("content") or "").strip()[:1600],
                 ))
                 if len(sources) >= settings.tide_source_max_results:
                     break
         if not sources:
             raise ProviderError("tavily_no_results", "Tavily 没有返回可验证的周报来源")
+        return sources
+
+    def _latest_public_source_candidates(self) -> list[WeeklyTideSource]:
+        """Publisher list pages are fresher than the third-party search index."""
+        sources: list[WeeklyTideSource] = []
+        seen_urls: set[str] = set()
+        with httpx.Client(timeout=httpx.Timeout(min(settings.tide_source_verify_timeout_seconds, 10)), follow_redirects=True) as client:
+            for listing_url, channel, publisher, pattern in _FIRST_PARTY_WEEKLY_LISTINGS:
+                try:
+                    response = client.get(listing_url, headers={"User-Agent": "MountainLore/0.2 weekly-source-list"})
+                    response.raise_for_status()
+                except httpx.HTTPError:
+                    continue
+                count = 0
+                for raw_url in re.findall(pattern, response.text, flags=re.I):
+                    url = urljoin(listing_url, raw_url).split("#", 1)[0]
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    date_match = re.search(r"/(20\d{2})/(\d{1,2})/(\d{1,2})/", url)
+                    published_at = "-".join(date_match.groups()) if date_match else None
+                    sources.append(WeeklyTideSource(url, channel, publisher, f"{publisher} 最新公开文章", published_at))
+                    count += 1
+                    if count >= 10:
+                        break
         return sources
 
     def _tavily_search(self, search_query: TavilyWeeklyQuery) -> dict[str, Any]:
@@ -336,7 +373,7 @@ class CreditsProvider:
             "include_domains": [search_query.domain],
             "country": settings.tavily_country,
             "include_answer": False,
-            "include_raw_content": False,
+            "include_raw_content": "markdown",
         }
         try:
             response = self._post_tavily(payload)
@@ -362,20 +399,35 @@ class CreditsProvider:
             return client.post("https://api.tavily.com/search", json=payload)
 
     def weekly_tide_ideas(self, sources: list[dict[str, Any]], holidays: list[dict[str, str]]) -> list[WeeklyTideIdea]:
-        result = self.tide_chat_json(
-            model=settings.tide_synthesis_model,
-            instruction=(
-                "基于已验链来源生成5到6条通用的餐饮/新消费创意灵感。"
+        instruction = (
+                "基于已验链来源的正文摘录生成5到6条通用的餐饮/新消费创意灵感。"
                 "趋势只能作为创意角度，不能写成品牌、产品或功效事实；不得添加未在输入来源中出现的信息。"
                 "每条必须引用至少一个输入 source_urls，主题不可重复；结合未来45天节日，若无适合节点写“非节日驱动”。"
                 "返回 JSON：{\"ideas\":[{\"theme\":\"...\",\"content_motif\":\"...\","
                 "\"applicable_scene\":\"...\",\"festival_context\":\"...\",\"risk_note\":\"...\","
                 "\"source_urls\":[\"https://...\"]}]}。"
-            ),
-            context={"verified_sources": sources, "upcoming_holidays": holidays},
-            # The platform's kimi-k3 gateway accepts only temperature=1.
-            temperature=1,
-        )
+            )
+        context = {"verified_sources": sources, "upcoming_holidays": holidays}
+        try:
+            result = self.tide_chat_json(
+                model=settings.tide_synthesis_model,
+                instruction=instruction,
+                context=context,
+                # The platform's kimi-k3 gateway accepts only temperature=1.
+                temperature=1,
+                timeout_seconds=25,
+            )
+        except ProviderError as exc:
+            if exc.code != "provider_timeout":
+                raise
+            # The general text channel is already used by the rest of the
+            # workbench. It is a fast, configured fallback when the isolated
+            # weekly synthesis gateway stalls.
+            result = self.chat_json(
+                model=settings.openai_next_text_model,
+                instruction=instruction,
+                context=context,
+            )
         raw_ideas = result.get("ideas")
         if not isinstance(raw_ideas, list):
             raise ProviderError("invalid_model_json", "联网模型没有返回周报灵感")
