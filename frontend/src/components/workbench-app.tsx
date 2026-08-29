@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, createRequestId, encodeFileNameForHeader } from "@/lib/api";
 import { ArchiveFolioDialog, BrandMaterials, DirectionDraftDialog, ProjectDirectory } from "@/components/archive-studio";
 import { BrandManualResult, type ManualVisualPreferences } from "@/components/brand-manual-result";
@@ -34,6 +34,10 @@ const stickerByProduct: Record<string, string> = { 刺梨: "sticker-cili.png", �
 const primaryScreens: Array<{ key: "fieldwork" | "tide" | "launch"; label: string; number: string }> = [
   { key: "fieldwork", label: "采风", number: "01" }, { key: "tide", label: "观潮", number: "02" }, { key: "launch", label: "出山", number: "03" },
 ];
+const mobileScreenTitles: Record<Screen, string> = {
+  setup: "采风", interview: "采风", candidates: "采风", chronicle: "采风", directions: "采风", manual: "品牌手册",
+  tide: "观潮", launch: "出山", "project-directory": "档案", archive: "档案", assets: "档案",
+};
 type MaterialTemplate = { id: string; label: string; note: string; image?: string; alt?: string };
 const multimodalPromptGuide = "\n\n任务目标：围绕以上需求直接生成一套可使用的图文成品——文字内容与配套视觉画面应围绕同一主题、场景和情绪共同完成表达。文字应可直接用于发布或继续编辑；画面应作为可直接使用的品牌视觉方案，而不是对画面如何生成的说明。\n\n品牌资产运用：如本次任务已提供 Logo、品牌主视觉、延展纹样、产品照片或其他品牌资产，最终画面请优先沿用其可见的轮廓、比例、主色、材质感和摄影语气。";
 const launchPromptTemplates = [
@@ -115,6 +119,14 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const [archiveModal, setArchiveModal] = useState<"cards" | null>(null);
   const [directionDraft, setDirectionDraft] = useState<Direction | null>(() => initialDirectionDraft ? demoSeed?.directions[0] ?? null : null);
   const [tideReport, setTideReport] = useState<TideReport | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileNavTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileDrawerRef = useRef<HTMLElement>(null);
+
+  const closeMobileNav = useCallback((restoreFocus = true) => {
+    setMobileNavOpen(false);
+    if (restoreFocus) window.requestAnimationFrame(() => mobileNavTriggerRef.current?.focus());
+  }, []);
 
   function loadDemoWorkspace(reason?: unknown) {
     const demo = createDemoWorkspace();
@@ -133,6 +145,25 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       } catch { window.localStorage.removeItem("mountainlore-project-id"); }
     }).catch(loadDemoWorkspace);
   }, [initialDemo]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const drawer = mobileDrawerRef.current;
+    const focusableSelector = "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); closeMobileNav(); return; }
+      if (event.key !== "Tab" || !drawer) return;
+      const focusable = Array.from(drawer.querySelectorAll(focusableSelector)) as HTMLElement[];
+      if (!focusable.length) return;
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.body.classList.add("mobile-nav-open");
+    document.addEventListener("keydown", handleKeyDown);
+    const focusFrame = window.requestAnimationFrame(() => drawer?.querySelector<HTMLElement>(focusableSelector)?.focus());
+    return () => { document.body.classList.remove("mobile-nav-open"); document.removeEventListener("keydown", handleKeyDown); window.cancelAnimationFrame(focusFrame); };
+  }, [closeMobileNav, mobileNavOpen]);
 
   const confirmedCount = useMemo(() => candidates.filter((item) => item.status === "confirmed").length, [candidates]);
   const currentDirection = workspace?.directions.find((item) => item.state === "current");
@@ -316,6 +347,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     finally { setBusy(false); }
   }
   const navigate = (next: Screen) => {
+    if (mobileNavOpen) closeMobileNav();
     if (next === "launch" && screen !== "launch") { setLaunchArchiveId(null); setLaunchInspiration(null); setGenerationPreview(null); }
     if (!project && next !== "setup") {
       setScreen(next);
@@ -327,13 +359,27 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     }
     setScreen(next);
   };
-  const openFieldwork = () => setScreen("setup");
+  const openFieldwork = () => { if (mobileNavOpen) closeMobileNav(); setScreen("setup"); };
   const isPrimaryActive = (key: "fieldwork" | "tide" | "launch") => key === "fieldwork"
     ? ["setup", "interview", "candidates", "chronicle", "directions", "manual"].includes(screen)
     : screen === key;
+  const projectMark = project?.brand_name.trim().slice(0, 1) || "档";
   return <div className="app-shell">
-    <aside className="sidebar" aria-label="品牌工作台导航"><div className="brand-lockup"><span>贵品</span><div><strong>贵品风物志</strong></div></div><p className="sidebar-label">品牌工作台</p><nav>{primaryScreens.map((item) => <button key={item.key} className={`stage ${isPrimaryActive(item.key) ? "stage-current" : ""}`} onClick={() => item.key === "fieldwork" ? openFieldwork() : navigate(item.key)}><b>{item.number}</b><span>{item.label}</span></button>)}</nav><div className="sidebar-spacer" /><button className={`project-chip ${["project-directory", "archive", "assets"].includes(screen) ? "archive-current" : ""}`} onClick={() => navigate("project-directory")}><i aria-hidden="true" /><span>档案</span><small>{project?.brand_name ?? "品牌项目目录"}</small></button></aside>
-    <main className="workspace">{demoMode && <aside className="demo-banner" role="status"><span>{demoReason ? `真实后端暂不可用（${demoReason}），已载入演示数据。` : "演示数据模式：档案、观潮来源与出山结果均为模拟内容，仅供检查页面和交互。"}</span><button className="text-button" onClick={() => window.location.reload()}>重试真实服务</button></aside>}
+    {mobileNavOpen && <button type="button" className="mobile-nav-scrim" aria-label="关闭导航菜单" onClick={() => closeMobileNav()} />}
+    <aside ref={mobileDrawerRef} id="mobile-workspace-navigation" className={`sidebar ${mobileNavOpen ? "is-mobile-open" : ""}`} aria-label="品牌工作台导航">
+      <div className="mobile-drawer-head">
+        <button type="button" className="mobile-drawer-mark" aria-label="收起导航菜单" onClick={() => closeMobileNav()}>{projectMark}</button>
+        <div><span>当前项目</span><strong>{project?.brand_name ?? "品牌项目目录"}</strong></div>
+      </div>
+      <div className="brand-lockup"><span>贵品</span><div><strong>贵品风物志</strong></div></div><p className="sidebar-label">品牌工作台</p>
+      <nav aria-label="主导航">
+        {primaryScreens.map((item) => <button key={item.key} className={`stage ${isPrimaryActive(item.key) ? "stage-current" : ""}`} onClick={() => item.key === "fieldwork" ? openFieldwork() : navigate(item.key)}><b>{item.number}</b><span>{item.label}</span></button>)}
+        <button type="button" className={`stage mobile-archive-stage ${["project-directory", "archive", "assets"].includes(screen) ? "stage-current" : ""}`} onClick={() => navigate("project-directory")}><b>04</b><span>档案</span></button>
+      </nav>
+      <div className="sidebar-spacer" />
+      <button className={`project-chip ${["project-directory", "archive", "assets"].includes(screen) ? "archive-current" : ""}`} onClick={() => navigate("project-directory")}><i aria-hidden="true" /><span>档案</span><small>{project?.brand_name ?? "品牌项目目录"}</small></button>
+    </aside>
+    <main className="workspace"><header className="mobile-workspace-bar"><button ref={mobileNavTriggerRef} type="button" className="mobile-project-mark" aria-label={mobileNavOpen ? "收起导航菜单" : "打开导航菜单"} aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => mobileNavOpen ? closeMobileNav() : setMobileNavOpen(true)}>{projectMark}</button><span>{mobileScreenTitles[screen]}</span></header>{demoMode && <aside className="demo-banner" role="status"><span>{demoReason ? `真实后端暂不可用（${demoReason}），已载入演示数据。` : "演示数据模式：档案、观潮来源与出山结果均为模拟内容，仅供检查页面和交互。"}</span><button className="text-button" onClick={() => window.location.reload()}>重试真实服务</button></aside>}
       {screen === "setup" && <Setup form={form} setForm={setForm} busy={busy} onSubmit={start} onDemo={loadDemoWorkspace} />}
       {screen === "interview" && project && session && <Interview project={project} session={session} answer={answer} setAnswer={setAnswer} uploads={uploads} busy={busy} onFiles={uploadFiles} onSend={sendMessage} onFinish={finishFieldwork} />}
       {screen === "candidates" && <Candidates candidates={candidates} confirmed={confirmedCount} busy={busy} onResolve={resolveCandidate} onContinue={confirmChronicle} />}
