@@ -518,11 +518,6 @@ def get_tide_report(project_id: str, visitor: Annotated[dict[str, Any], Depends(
     return envelope(latest_report_for_project(project_id, visitor["id"]))
 
 
-@router.get("/tide-report/sample")
-def get_tide_report_sample(visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
-    """The demo uses the same anonymous visitor refresh contract as projects."""
-    return envelope(latest_report_for_project("demo-preview", visitor["id"]))
-
 
 @router.post("/tide-report/refresh", status_code=202)
 def refresh_tide_report(
