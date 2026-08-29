@@ -41,6 +41,79 @@ _TRACKING_QUERY_KEYS = {"spm", "from", "source", "ref", "referrer", "campaign", 
 _TERMINAL_REPORT_STATUSES = {"succeeded", "partial"}
 _RUNNING_TIMEOUT = timedelta(minutes=10)
 _RETRY_DELAY = timedelta(seconds=60)
+_BOOTSTRAP_SHARED_WEEK_KEY = "cached-2026-08-29-editorial-v4"
+_BOOTSTRAP_SHARED_CAPTURED_AT = "2026-08-29T10:49:05+00:00"
+# This is the last successfully verified shared edition, kept intentionally
+# small so a fresh database never starts with a blank report when live search
+# is temporarily unavailable. It is replaced by the next successful shared run.
+_BOOTSTRAP_SHARED_SOURCES = (
+    {
+        "url": "https://www.canyin88.com/zixun/2026/08/29/113154.html",
+        "channel": "industry",
+        "publisher": "红餐网",
+        "title": "90后企二代当选香飘飘副董事长；妙可蓝多进军香港市场",
+        "published_at": "2026-08-29",
+        "excerpt": "来源记录了食品企业的中秋礼盒、区域化口味研发、供应链与市场动态。",
+    },
+    {
+        "url": "https://www.canyin88.com/zixun/2026/08/29/113156.html",
+        "channel": "industry",
+        "publisher": "红餐网",
+        "title": "咖啡市场加速扩张，谁在喝？哪些场景最火？",
+        "published_at": "2026-08-29",
+        "excerpt": "来源讨论通勤、早餐、工作、居家和出行等饮品消费场景。",
+    },
+    {
+        "url": "https://www.canyin88.com/zixun/2026/08/29/113155.html",
+        "channel": "industry",
+        "publisher": "红餐网",
+        "title": "三家上市公司的命，绑在了一盘“菜”上？",
+        "published_at": "2026-08-29",
+        "excerpt": "来源讨论食用菌工厂化、供给集中、产能与价格周期。",
+    },
+    {
+        "url": "https://www.tidesight.com/news/1371277.html",
+        "channel": "industry",
+        "publisher": "观潮新消费",
+        "title": "工具物流双升级，TikTok Shop新加坡成跨境商家新支点",
+        "published_at": "2026-08-26",
+        "excerpt": "来源讨论跨区域经营工具、仓配网络与库存调配。",
+    },
+)
+_BOOTSTRAP_SHARED_IDEAS = (
+    {
+        "theme": "中秋山地物产礼盒的可溯源供应链叙事",
+        "content_motif": "把产地、加工批次、仓储和配送节点做成礼盒内的产地档案，以来源中的行业礼盒与供应链动态为创意角度。",
+        "applicable_scene": "山地茶叶、菌菇、粮油、发酵调味品等地方物产的中秋礼盒页、产品手册和产地溯源卡。",
+        "festival_context": "中秋：2026-09-25，适合礼赠、团圆分享、企业福利等表达。",
+        "risk_note": "不得虚构礼盒已上市、销量、产地认证或检测数据；具体产地与工艺须有独立验链来源。",
+        "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113154.html",),
+    },
+    {
+        "theme": "国庆山野出行的便携饮品与轻量补给灵感",
+        "content_motif": "从通勤、早餐、工作与居家等高频饮品场景，转译为山地农产品的小包装冲调饮、即饮茶饮或谷物饮表达。",
+        "applicable_scene": "国庆出行装、山野徒步随身包、产地旅行伴手礼、地方饮品新品概念页。",
+        "festival_context": "国庆：2026-10-01，适合山野出行、返乡探亲、自驾携带等场景。",
+        "risk_note": "不得把咖啡市场数据直接套用于地方饮品；不得宣称提神、补给或健康功效。",
+        "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113156.html",),
+    },
+    {
+        "theme": "食用菌品牌的价格周期与稳供能力内容档案",
+        "content_motif": "围绕工厂化、高周转、供给集中和价格周期，转译为食用菌产地对产能、冷链周转与稳定供货的科普表达。",
+        "applicable_scene": "食用菌产品册、产地供应链白皮书、B端采购说明与农事科普短文。",
+        "festival_context": "非节日驱动。",
+        "risk_note": "只能讨论来源出现的行业现象；不得虚构某产区价格走势、企业盈利或产品功效。",
+        "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113155.html",),
+    },
+    {
+        "theme": "地方物产跨区域销售的轻量履约叙事",
+        "content_motif": "参考多市场经营工具、仓配网络和库存调拨的公开案例，转译为小批量试销、包装标准化与库存可视化的供应链内容。",
+        "applicable_scene": "地方物产跨区域销售说明、跨境电商产品资料、仓配流程介绍和渠道端履约能力展示。",
+        "festival_context": "非节日驱动。",
+        "risk_note": "不得宣称自身具备海外仓或具体履约时效；来源只可作为供应链灵感。",
+        "source_urls": ("https://www.tidesight.com/news/1371277.html",),
+    },
+)
 
 @dataclass
 class VerifiedSource:
@@ -760,8 +833,57 @@ async def weekly_tide_refresh_loop(stop_event: asyncio.Event) -> None:
             continue
 
 
+def _ensure_bootstrap_shared_report() -> None:
+    """Install a verified shared fallback only when no successful edition exists."""
+    with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            """SELECT 1 FROM tide_editions
+               WHERE editorial_version = ? AND status IN ('succeeded', 'partial')
+               LIMIT 1""",
+            (TIDE_EDITORIAL_VERSION,),
+        ).fetchone()
+        if existing:
+            return
+        edition_id = new_id()
+        connection.execute(
+            """INSERT INTO tide_editions
+               (id, week_key, status, error_code, created_at, completed_at, editorial_version)
+               VALUES (?, ?, 'partial', NULL, ?, ?, ?)""",
+            (
+                edition_id, _BOOTSTRAP_SHARED_WEEK_KEY, _BOOTSTRAP_SHARED_CAPTURED_AT,
+                _BOOTSTRAP_SHARED_CAPTURED_AT, TIDE_EDITORIAL_VERSION,
+            ),
+        )
+        source_ids: dict[str, str] = {}
+        for source in _BOOTSTRAP_SHARED_SOURCES:
+            source_id = new_id()
+            source_ids[source["url"]] = source_id
+            connection.execute(
+                """INSERT INTO tide_report_sources
+                   (id, edition_id, channel, publisher, source_url, source_title, published_at, source_excerpt, captured_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    source_id, edition_id, source["channel"], source["publisher"], source["url"],
+                    source["title"], source["published_at"], source["excerpt"], _BOOTSTRAP_SHARED_CAPTURED_AT,
+                ),
+            )
+        for idea in _BOOTSTRAP_SHARED_IDEAS:
+            connection.execute(
+                """INSERT INTO tide_report_ideas
+                   (id, edition_id, theme, content_motif, applicable_scene, festival_context, risk_note, source_ids_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    new_id(), edition_id, idea["theme"], idea["content_motif"], idea["applicable_scene"],
+                    idea["festival_context"], idea["risk_note"],
+                    json_value([source_ids[url] for url in idea["source_urls"]]), _BOOTSTRAP_SHARED_CAPTURED_AT,
+                ),
+            )
+
+
 def latest_report_for_project(project_id: str, visitor_id: str | None = None) -> dict[str, Any]:
     """Prefer this visitor's current personal report, otherwise show shared."""
+    _ensure_bootstrap_shared_report()
     refresh_state = personal_refresh_state(visitor_id) if visitor_id else {
         "status": "idle", "phase": "idle", "can_refresh": False,
         "next_refresh_at": next_personal_refresh_at(), "error_code": None, "attempt_count": 0,
@@ -811,7 +933,11 @@ def latest_report_for_project(project_id: str, visitor_id: str | None = None) ->
             idea["favorite"] = preference.get("favorite", 0)
             idea["used_at"] = preference.get("used_at")
         return {
-            "edition": edition | {"scope": scope, "ideas": ideas},
+            "edition": edition | {
+                "scope": scope,
+                "is_fallback": scope == "shared" and edition["week_key"] == _BOOTSTRAP_SHARED_WEEK_KEY,
+                "ideas": ideas,
+            },
             "latest_attempt": latest_attempt,
             "refresh_state": refresh_state,
             "next_refresh_at": refresh_state["next_refresh_at"],

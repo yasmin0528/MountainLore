@@ -63,6 +63,21 @@ def _weekly_ideas(sources: list[dict[str, str]]) -> list[WeeklyTideIdea]:
     ]
 
 
+def test_cold_start_installs_a_verified_shared_fallback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "cold-start.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    initialize_database()
+
+    first = latest_report_for_project("new-project", "new-visitor")
+    second = latest_report_for_project("another-project", "another-visitor")
+
+    assert first["edition"]["scope"] == "shared"
+    assert first["edition"]["is_fallback"] is True
+    assert len(first["edition"]["ideas"]) == 4
+    assert first["edition"]["id"] == second["edition"]["id"]
+    assert first["edition"]["ideas"][0]["sources"][0]["source_url"].startswith("https://")
+
+
 def test_weekly_report_is_verified_shared_and_keeps_previous_success(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "tide-report.db"))
     monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
@@ -300,7 +315,9 @@ def test_personal_partial_report_is_weekly_reused_and_private(tmp_path: Path, mo
     assert first_project["edition"]["id"] == second_project["edition"]["id"]
     assert first_project["refresh_state"]["status"] == "partial"
     assert first_project["refresh_state"]["can_refresh"] is False
-    assert other_visitor["edition"] is None
+    assert other_visitor["edition"]["scope"] == "shared"
+    assert other_visitor["edition"]["is_fallback"] is True
+    assert other_visitor["edition"]["id"] != first_project["edition"]["id"]
     assert other_visitor["refresh_state"]["can_refresh"] is True
 
 

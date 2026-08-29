@@ -25,7 +25,7 @@ type Tide = { id: string; status: string; error_code?: string; completed_at?: st
 type TideReportSource = { id: string; channel: "industry" | "xiaohongshu" | "douyin"; publisher: string; source_url: string; source_title: string; published_at?: string };
 type TideReportIdea = { id: string; theme: string; content_motif: string; applicable_scene: string; festival_context: string; risk_note: string; favorite: number; sources: TideReportSource[] };
 type TideRefreshState = { status: "idle" | "running" | "succeeded" | "partial" | "failed"; phase: "idle" | "collecting" | "verifying" | "deduplicating" | "synthesizing" | "completed" | "failed"; can_refresh: boolean; next_refresh_at: string; error_code?: string | null; attempt_count: number };
-type TideReport = { edition: { id: string; scope: "shared" | "personal"; status: "succeeded" | "partial"; completed_at?: string; ideas: TideReportIdea[] } | null; latest_attempt: { status: string; error_code?: string; completed_at?: string } | null; refresh_state: TideRefreshState; preview_sources?: TideReportSource[]; next_refresh_at: string };
+type TideReport = { edition: { id: string; scope: "shared" | "personal"; status: "succeeded" | "partial"; completed_at?: string; is_fallback?: boolean; ideas: TideReportIdea[] } | null; latest_attempt: { status: string; error_code?: string; completed_at?: string } | null; refresh_state: TideRefreshState; preview_sources?: TideReportSource[]; next_refresh_at: string };
 export type Job = { id: string; template_type: string; status: string; result: Record<string, unknown>; error_code?: string; regeneration_used: number };
 type GenerationPreview = { id: string; template_type: "peripheral" | "xiaohongshu"; status: string; inspiration_text: string; result: Record<string, unknown> };
 export type Workspace = { project: Project; session?: Session | null; archive_cards: ArchiveCard[]; claims?: Claim[]; directions: Direction[]; tasks?: WorkflowTask[]; manual?: { content: Record<string, unknown>; current_version_id?: string }; manual_versions?: ManualVersion[]; manual_assets?: ManualAsset[]; exports?: Array<{ id: string; format: string; download_url?: string }>; shares?: Array<{ id: string; revoked_at?: string; created_at: string }>; tide_searches: Tide[]; generation_jobs: Job[] };
@@ -542,20 +542,24 @@ function Tide({ report, demoMode, busy, onRefresh, onFavorite, onUse, onNext }: 
   const errorLabel: Record<string, string> = {
     tavily_auth_failed: "资讯搜集服务的凭证无效，请联系维护人员。",
     tavily_quota_or_rate_limited: "资讯搜集服务当前繁忙，60 秒后可重试。",
-    provider_timeout: "资讯提炼超时，旧周报已保留，60 秒后可重试。",
+    provider_timeout: "资讯提炼超时，60 秒后可重试。",
     no_new_verified_sources: "近四周排重后暂未发现新增且可验链的文章。",
     no_valid_tide_ideas: "已找到文章，但本次没有提炼出可发布的主题灵感。",
-    refresh_interrupted: "刷新任务运行超时并已中断，旧周报仍在。",
-    tide_refresh_failed: "刷新过程中出现异常，旧周报已保留。",
+    refresh_interrupted: "刷新任务运行超时并已中断。",
+    tide_refresh_failed: "刷新过程中出现异常。",
     tide_not_configured: "观潮联网服务尚未配置。",
   };
   const status = refresh?.status === "running"
     ? "正在" + phaseLabel[refresh.phase] + "；刷新完成前继续显示当前周报。"
     : refresh?.status === "failed"
-      ? (errorLabel[refresh.error_code ?? ""] ?? "本次刷新未完成，旧周报已保留。")
+      ? (edition
+        ? "本次刷新未完成，正在继续显示已有周报。 " + (errorLabel[refresh.error_code ?? ""] ?? "")
+        : "本次刷新未完成，暂未取得可展示的周报。 " + (errorLabel[refresh.error_code ?? ""] ?? "请在 60 秒后重试。"))
       : edition?.scope === "personal"
         ? (edition.status === "partial" ? "你的私人周报已更新 · 本周资讯较少，共 " + edition.ideas.length + " 条有效灵感" : "你的私人周报已更新 · 共 " + edition.ideas.length + " 条有效灵感")
-        : edition
+        : edition?.is_fallback
+          ? "当前显示最近一次已验链的共享周报；下次自动刷新成功后会更新。"
+          : edition
           ? "当前显示全站共享周报 · 采集于 " + archiveDate(edition.completed_at)
           : "当前还没有可显示的周报，可使用本周私人刷新机会。";
   const refreshLabel = refresh?.status === "running"
@@ -579,10 +583,10 @@ function Tide({ report, demoMode, busy, onRefresh, onFavorite, onUse, onNext }: 
     <StageHeader eyebrow="观潮 / 本周观察" title="把公开观察，转译成山地农产品的主题灵感" copy="每周一自动更新全站共享周报；每位访客每个中国自然周另有一次私人联网刷新。刷新只影响你，趋势不会改写品牌事实。" />
     <div className="tide-ledger" aria-label="观潮刷新进度">{phaseOrder.map((phase, index) => <span className={phaseIndex === index ? "is-active" : phaseIndex > index || refresh && ["succeeded", "partial"].includes(refresh.status) ? "is-done" : ""} key={phase}>{index + 1}. {phaseLabel[phase]}</span>)}</div>
     <section className={"tide-refresh-panel " + (refresh?.status ?? "idle")} role="status">
-      <div><strong>{status}</strong><small>{edition ? (edition.scope === "personal" ? "仅你可见，并在你的所有项目中复用" : "所有访客可见；私人刷新不会覆盖它") : "刷新失败不会消耗本周机会"}</small></div>
+      <div><strong>{status}</strong><small>{edition ? (edition.scope === "personal" ? "仅你可见，并在你的所有项目中复用" : edition.is_fallback ? "本地数据库首次启动时展示的已验链共享快照；私人刷新不会覆盖它" : "所有访客可见；私人刷新不会覆盖它") : "刷新失败不会消耗本周机会"}</small></div>
       <button className="secondary-button tide-refresh-button" disabled={refreshDisabled} onClick={onRefresh}>{refreshLabel}</button>
     </section>
-    {edition?.ideas.length ? <div className="inspiration-grid">{edition.ideas.map((idea, index) => <article className="inspiration-card tide-report-card" key={idea.id}><header><p className="eyebrow">{edition.scope === "personal" ? "私人灵感" : "共享灵感"} {String(index + 1).padStart(2, "0")}</p><time>{idea.festival_context}</time></header><h2>{idea.theme}</h2><p>{idea.content_motif}</p><dl className="tide-idea-meta"><dt>可能的机会点</dt><dd>{idea.applicable_scene}</dd>{idea.sources.length ? <><dt>提炼来源 / 原文链接</dt><dd>{idea.sources.map((source) => <a href={source.source_url} target="_blank" rel="noreferrer" key={source.id}><span>{channelLabel[source.channel]} · {source.publisher} · {source.published_at}</span>{source.source_title} <em>打开原文 ↗</em></a>)}</dd></> : <><dt>灵感依据</dt><dd>节假日节点：{idea.festival_context}（不引用新闻媒体）</dd></>}</dl><footer><div>{demoMode ? <span>演示入口不写入项目收藏</span> : <><button className="text-button" disabled={busy} onClick={() => onFavorite(idea.id)}>{idea.favorite ? "已收藏" : "收藏灵感"}</button><span>{idea.risk_note}</span></>}</div>{!demoMode && <button className="secondary-button" disabled={busy} onClick={() => onUse(idea)}>用此灵感出山</button>}</footer></article>)}</div> : previewSources.length ? <section className="inspiration-grid" aria-label="近 7 天已验链文章">{articleCards}</section> : <Empty title={refresh?.status === "running" ? "正在搜集本周资讯，完成后会自动出现在这里。" : "当前没有可显示的周报；可以使用本周私人刷新机会。"} />}
+    {edition?.ideas.length ? <div className="inspiration-grid">{edition.ideas.map((idea, index) => <article className="inspiration-card tide-report-card" key={idea.id}><header><p className="eyebrow">{edition.scope === "personal" ? "私人灵感" : "共享灵感"} {String(index + 1).padStart(2, "0")}</p><time>{idea.festival_context}</time></header><h2>{idea.theme}</h2><p>{idea.content_motif}</p><dl className="tide-idea-meta"><dt>可能的机会点</dt><dd>{idea.applicable_scene}</dd>{idea.sources.length ? <><dt>提炼来源 / 原文链接</dt><dd>{idea.sources.map((source) => <a href={source.source_url} target="_blank" rel="noreferrer" key={source.id}><span>{channelLabel[source.channel]} · {source.publisher} · {source.published_at}</span>{source.source_title} <em>打开原文 ↗</em></a>)}</dd></> : <><dt>灵感依据</dt><dd>节假日节点：{idea.festival_context}（不引用新闻媒体）</dd></>}</dl><footer><div>{demoMode ? <span>演示入口不写入项目收藏</span> : <><button className="text-button" disabled={busy} onClick={() => onFavorite(idea.id)}>{idea.favorite ? "已收藏" : "收藏灵感"}</button><span>{idea.risk_note}</span></>}</div>{!demoMode && <button className="secondary-button" disabled={busy} onClick={() => onUse(idea)}>用此灵感出山</button>}</footer></article>)}</div> : previewSources.length ? <section className="inspiration-grid" aria-label="近 7 天已验链文章">{articleCards}</section> : <Empty title={refresh?.status === "running" ? "正在搜集本周资讯，完成后会自动出现在这里。" : refresh?.status === "failed" ? "本次联网刷新没有发布新结果；请在 60 秒后重试。" : "当前没有可显示的周报；可以使用本周私人刷新机会。"} />}
     <footer className="stage-next"><button className="primary-button" onClick={onNext}>{demoMode ? "查看出山演示" : "不选灵感，直接出山"}</button></footer>
   </section>;
 }
