@@ -2,12 +2,14 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.fieldwork.store import initialize_database
 from app.main import app
-from app.services.providers import WeeklyTideIdea, WeeklyTideSource, provider
+from app.services.providers import ProviderError, WeeklyTideIdea, WeeklyTideSource, _TAVILY_WEEKLY_QUERIES, provider
 from app.services.tide_report import VerifiedSource, is_allowed_source_url, latest_report_for_project, refresh_weekly_tide_report
 import app.services.tide_report as tide_report
 
@@ -103,7 +105,8 @@ def test_tide_provider_uses_its_own_models_and_credentials(monkeypatch) -> None:
     monkeypatch.setattr(settings, "openai_next_text_model", "global-model")
     monkeypatch.setattr(settings, "tide_api_key", "tide-key")
     monkeypatch.setattr(settings, "tide_api_base_url", "https://tide.example/v1")
-    monkeypatch.setattr(settings, "tide_search_model", "sonar-medium-online")
+    monkeypatch.setattr(settings, "tavily_api_key", "tavily-key")
+    monkeypatch.setattr(settings, "tide_search_provider", "tavily")
     monkeypatch.setattr(settings, "tide_synthesis_model", "kimi-k3")
     captured: dict[str, object] = {}
 
@@ -112,16 +115,16 @@ def test_tide_provider_uses_its_own_models_and_credentials(monkeypatch) -> None:
         return {"ok": True}
 
     monkeypatch.setattr(provider, "_chat_json", _capture)
-    assert provider.tide_chat_json(model=settings.tide_search_model, instruction="search", context={}) == {"ok": True}
+    assert provider.tide_chat_json(model=settings.tide_synthesis_model, instruction="synthesize", context={}) == {"ok": True}
     assert captured["base_url"] == "https://tide.example/v1"
     assert captured["api_key"] == "tide-key"
-    assert captured["model"] == "sonar-medium-online"
+    assert captured["model"] == "kimi-k3"
     assert captured["temperature"] is None
     readiness = provider.readiness()
     assert readiness["capabilities"]["tide"] == {
         "configured": True,
         "model": "kimi-k3",
-        "search_model": "sonar-medium-online",
+        "search_provider": "tavily",
         "status": "configured",
     }
     assert readiness["text_model"] == "global-model"
@@ -139,3 +142,44 @@ def test_tide_k3_synthesis_uses_gateway_compatible_temperature(monkeypatch) -> N
     assert provider.weekly_tide_ideas([], []) == []
     assert captured["model"] == "kimi-k3"
     assert captured["temperature"] == 1
+
+
+def test_tavily_candidates_cover_each_source_group_and_deduplicate(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    monkeypatch.setattr(settings, "tavily_api_key", "tavily-key")
+    monkeypatch.setattr(settings, "tide_search_provider", "tavily")
+    monkeypatch.setattr(settings, "tavily_max_results_per_query", 3)
+    calls: list[str] = []
+
+    def _search(query):
+        calls.append(query.domain)
+        return {
+            "results": [
+                {"url": f"https://www.{query.domain}/article-1", "title": f"{query.publisher} 标题", "published_date": "2026-08-28"},
+                {"url": "https://www.foodaily.com/duplicate", "title": "重复", "published_date": None},
+                {"url": f"https://www.{query.domain}/old-article", "title": "旧文章", "published_date": "2025-01-01"},
+            ]
+        }
+
+    monkeypatch.setattr(provider, "_tavily_search", _search)
+    sources = provider.weekly_tide_candidates()
+    assert calls == [
+        "canyin88.com", "watcn.com", "foodaily.com", "foodinc.com.cn",
+        "tidesight.com", "36kr.com", "xiaohongshu.com", "douyin.com",
+    ]
+    assert {source.channel for source in sources} == {"industry", "xiaohongshu", "douyin"}
+    assert len({source.url for source in sources}) == len(sources)
+    assert any(source.published_at is None for source in sources)
+    assert all("old-article" not in source.url for source in sources)
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(401, "tavily_auth_failed"), (429, "tavily_quota_or_rate_limited")],
+)
+def test_tavily_failure_codes_are_explicit(monkeypatch, status: int, code: str) -> None:
+    request = httpx.Request("POST", "https://api.tavily.com/search")
+    monkeypatch.setattr(provider, "_post_tavily", lambda payload: httpx.Response(status, request=request))
+    with pytest.raises(ProviderError) as raised:
+        provider._tavily_search(_TAVILY_WEEKLY_QUERIES[0])
+    assert raised.value.code == code
