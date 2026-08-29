@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, CSSProperties, KeyboardEvent, useMemo, useState } from "react";
+import { ChangeEvent, CSSProperties, KeyboardEvent, useMemo, useRef, useState } from "react";
 import { api, createRequestId, encodeFileNameForHeader } from "@/lib/api";
 import type { Direction, ManualAsset, WorkflowTask, Workspace } from "@/components/workbench-app";
 
@@ -10,9 +10,10 @@ export type ManualVisualPreferences = { logo_mode: "upload" | "ai"; logo_media_a
 
 const DEFAULT_PALETTE = ["#18372B", "#2B6173", "#D5A72B", "#F7F1E3"];
 const FONT_OPTIONS = [
-  { value: "Source Han Serif SC", label: "思源宋体 / 思源黑体" },
-  { value: "Source Han Sans SC", label: "思源黑体 / 思源宋体" },
-  { value: "system-ui", label: "现代无衬线 / 系统字体" },
+  { value: "Source Han Serif SC", label: "山野叙事", description: "宋体标题 · 清晰正文", sample: "山中有物，风物有声" },
+  { value: "Noto Sans SC", label: "清朗档案", description: "现代无衬线 · 信息优先", sample: "把产地故事讲得清楚明白" },
+  { value: "LXGW WenKai", label: "人文手札", description: "手写感正文 · 温暖亲近", sample: "把一季风土，写进日常" },
+  { value: "system-ui", label: "现代标识", description: "系统字体 · 简洁利落", sample: "为当下而生的品牌表达" },
 ];
 
 function routeContent(route?: Direction): Content { return (route?.content_json ?? route?.content ?? {}) as Content; }
@@ -73,19 +74,19 @@ function Setup({ workspace, busy, onGenerate, onFailure }: { workspace: Workspac
   const [logoPreview, setLogoPreview] = useState(""); const [logoAssetId, setLogoAssetId] = useState("");
   const [font, setFont] = useState(FONT_OPTIONS[0]); const [palette, setPalette] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false); const [notice, setNotice] = useState("");
-  async function uploadLogo(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]; if (!file) return;
-    setUploading(true); setNotice(""); setLogoPreview(URL.createObjectURL(file));
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  async function uploadLogo(file: File) {
+    setUploading(true); setNotice(""); setLogoMode("upload"); setLogoPreview(URL.createObjectURL(file));
     try {
       const [colors, uploaded] = await Promise.all([extractPalette(file), api<{ data: { id: string } }>("/media", { method: "POST", body: file, headers: { "Content-Type": file.type || "image/png", "X-Project-ID": workspace.project.id, "X-File-Name": encodeFileNameForHeader(file.name) } })]);
-      setPalette(colors); setLogoAssetId(uploaded.data.id); setNotice("Logo 已上传，并提取出 4 个候选色。你仍可逐个调整。");
+      setPalette(colors); setLogoAssetId(uploaded.data.id); setNotice("Logo 已上传。系统会据此自动提炼品牌色彩。");
     } catch { const message = "Logo 上传或取色未完成，请换一张图片重试。"; setNotice(message); onFailure(message); } finally { setUploading(false); }
   }
+  function skipLogo() { setLogoMode("ai"); setLogoPreview(""); setLogoAssetId(""); setPalette([]); setNotice("已跳过 Logo 上传，系统将在后续生成中补全视觉标识。"); }
   const canGenerate = logoMode === "ai" || Boolean(logoAssetId);
-  return <section className="manual-onboarding-page"><header><div><p className="eyebrow">品牌手册</p><h1>品牌手册</h1><p>选择 Logo、字体和颜色。</p></div><img src="/guipin/assets/sticker-custom.png" alt="" /></header><ol className="manual-setup-steps">
-    <li><article><span>01</span><div><h2>Logo</h2><p>上传已有 Logo，或比较三条方案。</p></div></article><div className="manual-choice-row"><button className={logoMode === "upload" ? "is-selected" : ""} onClick={() => setLogoMode("upload")}>上传 Logo</button><button className={logoMode === "ai" ? "is-selected" : ""} onClick={() => setLogoMode("ai")}>比较文字方案</button></div>{logoMode === "upload" ? <label className="manual-logo-drop">{logoPreview ? <img src={logoPreview} alt="上传 Logo 预览" /> : <span>选择 PNG、JPG 或 WebP</span>}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadLogo} /></label> : <div className="manual-ai-logo-note"><p>生成路线后选择一条，再生成 Logo。</p></div>}{notice && <small className="manual-setup-notice">{notice}</small>}</li>
-    <li><article><span>02</span><div><h2>字体</h2><p>选择字体。</p></div></article><div className="manual-font-options">{FONT_OPTIONS.map((option) => <button key={option.value} className={font.value === option.value ? "is-selected" : ""} style={{ fontFamily: option.value }} onClick={() => setFont(option)}>{option.label}</button>)}</div></li>
-    <li><article><span>03</span><div><h2>颜色</h2><p>{logoAssetId ? "已从上传 Logo 提取四个候选色。" : "AI 将先给出三条路线各自的配色方案与提炼依据。"}</p></div></article>{palette.length ? <div className="manual-palette-fields">{palette.map((color, index) => <label key={`${index}-${color}`}><input type="color" value={color} onChange={(event) => setPalette((items) => items.map((item, itemIndex) => itemIndex === index ? event.target.value.toUpperCase() : item))} /><input value={color} maxLength={7} onChange={(event) => setPalette((items) => items.map((item, itemIndex) => itemIndex === index ? event.target.value.toUpperCase() : item))} aria-label={`候选色 ${index + 1}`} /></label>)}</div> : <p className="manual-route-palette-note">选择路线前不预设通用色板，避免不同品牌使用同一套配色。</p>}</li>
+  return <section className="manual-onboarding-page"><header><div><p className="eyebrow">品牌手册</p><h1>品牌手册</h1><p>上传 Logo 或跳过，并选择一套字体。色彩会由系统结合品牌资料自动生成。</p></div><img src="/guipin/assets/sticker-custom.png" alt="" /></header><ol className="manual-setup-steps">
+    <li><article><span>01</span><div><h2>Logo</h2><p>已有 Logo 可直接上传；没有也可以先跳过。</p></div></article><button type="button" className="manual-logo-drop" onClick={() => logoInputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files?.[0]; if (file) void uploadLogo(file); }}>{logoPreview ? <img src={logoPreview} alt="上传 Logo 预览" /> : <span><i aria-hidden="true">↑</i><b>上传文件</b><small>点击上传或拖动文件到此处</small><em>PNG、JPG 或 WebP</em></span>}</button><input ref={logoInputRef} className="manual-logo-file-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadLogo(file); }} /><div className="manual-logo-actions"><button type="button" className="manual-upload-button" onClick={() => logoInputRef.current?.click()} disabled={uploading}>上传 Logo</button><button type="button" className="manual-skip-button" onClick={skipLogo} disabled={uploading}>跳过</button></div>{notice && <small className="manual-setup-notice">{notice}</small>}</li>
+    <li><article><span>02</span><div><h2>字体</h2><p>每套方案均以实际字体渲染，选择后会应用到品牌手册。</p></div></article><div className="manual-font-options">{FONT_OPTIONS.map((option) => <button type="button" key={option.value} className={font.value === option.value ? "is-selected" : ""} onClick={() => setFont(option)}><span className="manual-font-option-title">{option.label}</span><span className="manual-font-sample" style={{ fontFamily: option.value }}>{option.sample}</span><small>{option.description}</small></button>)}</div></li>
   </ol><footer><button className="primary-button" disabled={busy || uploading || !canGenerate} onClick={() => onGenerate({ logo_mode: logoMode, logo_media_asset_id: logoAssetId || undefined, font_family: font.value, font_label: font.label, palette })}>{uploading ? "正在读取 Logo…" : busy ? "正在生成…" : "生成三条品牌路线 →"}</button></footer></section>;
 }
 
@@ -119,7 +120,7 @@ export function BrandManualResult({ workspace, logoTask, patternTask, exportTask
   const editableText = (key: string, multiline = true) => editing ? (multiline ? <textarea value={text(draft[key])} onChange={(event) => setField(key, event.target.value)} /> : <input value={text(draft[key])} onChange={(event) => setField(key, event.target.value)} />) : <p>{text(draft[key], "尚未生成")}</p>;
 
   return <section className="manual-deck-page" tabIndex={0} onKeyDown={handleKeys} aria-label={`${workspace.project.brand_name} 品牌手册`}><header className="manual-deck-top"><button className="text-button" onClick={onOpenArchive}>← 品牌档案</button><div><span className="manual-current-tag">当前路线</span><b>{current?.title ?? "尚未生成"}</b></div></header><div className="manual-deck-layout">
-    <article className="manual-slide-canvas" style={{ "--manual-primary": palette[0] ?? DEFAULT_PALETTE[0], "--manual-secondary": palette[1] ?? DEFAULT_PALETTE[1] } as CSSProperties}>
+    <article className="manual-slide-canvas" style={{ "--manual-primary": palette[0] ?? DEFAULT_PALETTE[0], "--manual-secondary": palette[1] ?? DEFAULT_PALETTE[1], "--manual-font": text(draft.font_family, FONT_OPTIONS[0].value) } as CSSProperties}>
       {slide === 0 && <section className="manual-slide cover-slide"><div><span>品牌手册</span>{editing ? <input className="manual-cover-name-input" value={text(draft.display_name)} onChange={(event) => setField("display_name", event.target.value)} /> : <h1>{text(draft.display_name, workspace.project.brand_name)}</h1>}{editableText("cover_subtitle", false)}</div><Logo asset={logo} /></section>}
       {slide === 1 && <section className="manual-slide logo-slide"><header><span>01</span><h1>Logo / 延展纹样</h1></header><div className="manual-logo-layout"><section className="manual-visual-asset"><small>最终 Logo</small><Logo asset={logo} />{logoTask?.status === "running" || logoTask?.status === "queued" ? <em>正在生成最终 Logo · {logoTask.progress}%</em> : logoTask?.status === "failed" ? <button className="text-button" onClick={() => onRetry(logoTask.id)}>Logo 生成失败，重试</button> : logo ? <em>已沉淀至品牌资产</em> : <em>尚未生成</em>}</section><section className="manual-visual-asset"><small>延展纹样</small><Pattern asset={pattern} />{patternTask?.status === "running" || patternTask?.status === "queued" ? <em>正在生成纹样 · {patternTask.progress}%</em> : patternTask?.status === "failed" ? <button className="text-button" onClick={() => onRetry(patternTask.id)}>纹样生成失败，重试</button> : pattern ? <em>已保存为品牌资产</em> : <button className="text-button" onClick={() => void onGenerateAsset("extension_pattern")}>生成延展纹样</button>}</section><section className="manual-logo-plan"><small>已选定的设计方案</small>{editing ? <><textarea value={text(draft.logo_design)} onChange={(event) => setField("logo_design", event.target.value)} /><textarea value={text(draft.logo_note)} onChange={(event) => setField("logo_note", event.target.value)} /><label className="manual-replace-logo">替换 Logo<input type="file" accept="image/png,image/jpeg,image/webp" onChange={replaceLogo} /></label></> : <><p>{text(draft.logo_design, "尚未生成")}</p><small>{text(draft.logo_note)}</small></>}</section></div></section>}
       {slide === 2 && <section className="manual-slide system-slide"><header><span>02</span><h1>字体 / 颜色</h1></header><div className="manual-system-grid"><section><small>字体方案</small>{editing ? <select value={text(draft.font_family)} onChange={(event) => { const option = FONT_OPTIONS.find((item) => item.value === event.target.value) ?? FONT_OPTIONS[0]; setDraft((value) => ({ ...value, font_family: option.value, font_label: option.label })); }}>{FONT_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select> : <h2 style={{ fontFamily: text(draft.font_family) }}>{text(draft.font_label)}</h2>}<p>标题与正文的字体组合。</p></section><section><small>品牌四色</small><div className="manual-slide-swatches">{palette.map((color, index) => <label key={`${color}-${index}`}><i style={{ backgroundColor: color }} />{editing ? <input value={color} onChange={(event) => { const next = [...palette]; next[index] = event.target.value.toUpperCase(); setField("color_palette", next); }} /> : <b>{color}</b>}</label>)}</div></section></div></section>}
