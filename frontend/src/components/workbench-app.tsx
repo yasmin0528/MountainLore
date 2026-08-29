@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { ArchiveFolioDialog, BrandMaterials, DirectionDraftDialog, ProjectDirectory } from "@/components/archive-studio";
 import { BrandManualResult } from "@/components/brand-manual-result";
@@ -88,6 +88,8 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const [launchPrompt, setLaunchPrompt] = useState("");
   const [launchType, setLaunchType] = useState<"peripheral" | "xiaohongshu">("peripheral");
   const [generationPreview, setGenerationPreview] = useState<GenerationPreview | null>(null);
+  const [launchArchiveId, setLaunchArchiveId] = useState<string | null>(null);
+  const [launchArchivePickerOpen, setLaunchArchivePickerOpen] = useState(false);
   const [demoMode, setDemoMode] = useState(initialDemo);
   const [demoReason, setDemoReason] = useState<string | null>(null);
   const [archiveModal, setArchiveModal] = useState<"cards" | null>(null);
@@ -116,7 +118,11 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
 
   const confirmedCount = useMemo(() => candidates.filter((item) => item.status === "confirmed").length, [candidates]);
   const currentDirection = workspace?.directions.find((item) => item.state === "current");
-  const latestJobs = workspace?.generation_jobs ?? [];
+  const launchWorkspace = launchArchiveId && workspace?.project.id === launchArchiveId ? workspace : null;
+  const launchActiveCards = launchWorkspace?.archive_cards.filter((card) => card.status === "active") ?? [];
+  const launchDirection = launchWorkspace?.directions.find((item) => item.state === "current");
+  const launchReady = Boolean(launchWorkspace && launchActiveCards.length && launchDirection);
+  const launchVisualAssetCount = launchWorkspace?.manual_assets?.filter((asset) => asset.media_asset_id).length ?? 0;
   const activeWorkflowTask = workspace?.tasks?.find((item) => ["route_generation", "manual_generation", "export"].includes(item.kind) && ["queued", "running"].includes(item.status));
   const latestRouteTask = workspace?.tasks?.find((item) => item.kind === "route_generation");
   const latestManualTask = workspace?.tasks?.find((item) => item.kind === "manual_generation");
@@ -218,9 +224,28 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   async function retryTask(id: string) { try { await api(`/tasks/${id}/retry`, { method: "POST" }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } }
   async function selectDirection(id: string): Promise<boolean> { if (demoMode) { setWorkspace((current) => current ? { ...current, project: { ...current.project, current_direction_id: id, status: "manual_ready" }, directions: current.directions.map((route) => ({ ...route, state: route.id === id ? "current" : "draft" })) } : current); setScreen("manual"); return true; } setBusy(true); setError(null); try { await api(`/directions/${id}/select`, { method: "POST", headers: { "Idempotency-Key": `manual-${id}` } }); await refreshWorkspace(); setScreen("manual"); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
   async function favoriteTideIdea(id: string) { if (!project) return; setBusy(true); setError(null); try { const response = await api<{ data: { favorite: number } }>(`/projects/${project.id}/tide-report-ideas/${id}/favorite`, { method: "POST" }); setTideReport((current) => current?.edition ? { ...current, edition: { ...current.edition, ideas: current.edition.ideas.map((idea) => idea.id === id ? { ...idea, favorite: response.data.favorite } : idea) } } : current); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
-  async function useTideIdea(idea: TideReportIdea) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/tide-report-ideas/${idea.id}/use`, { method: "POST" }); const source = idea.sources[0]; setLaunchInspiration({ id: idea.id, theme: idea.theme, content_motif: idea.content_motif, source_url: source?.source_url ?? "", source_title: source?.source_title ?? idea.theme, published_at: source?.published_at, fit_reason: idea.applicable_scene, risk_note: idea.risk_note, favorite: idea.favorite }); setScreen("launch"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
+  async function useTideIdea(idea: TideReportIdea) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/tide-report-ideas/${idea.id}/use`, { method: "POST" }); const source = idea.sources[0]; setLaunchInspiration({ id: idea.id, theme: idea.theme, content_motif: idea.content_motif, source_url: source?.source_url ?? "", source_title: source?.source_title ?? idea.theme, published_at: source?.published_at, fit_reason: idea.applicable_scene, risk_note: idea.risk_note, favorite: idea.favorite }); setLaunchArchiveId(null); setGenerationPreview(null); setScreen("launch"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
+  async function selectLaunchArchive(nextProject: Project) {
+    setBusy(true); setError(null);
+    try {
+      if (demoMode) {
+        const demo = createDemoWorkspace();
+        const selected = demoProjects().find((item) => item.id === nextProject.id) ?? demo.project;
+        demo.project = { ...demo.project, ...selected };
+        setProject(selected); setWorkspace(demo);
+      } else {
+        const response = await api<{ data: Workspace }>(`/projects/${nextProject.id}/workspace`);
+        setWorkspace(response.data); setProject(response.data.project);
+        window.localStorage.setItem("mountainlore-project-id", nextProject.id);
+      }
+      setLaunchArchiveId(nextProject.id); setGenerationPreview(null); setLaunchArchivePickerOpen(false);
+    } catch (caught) { setError(errorText(caught)); }
+    finally { setBusy(false); }
+  }
   async function previewLaunch() {
-    if (!project) return;
+    if (!project || !launchWorkspace || project.id !== launchArchiveId) { setError("请先选择本次出山要使用的品牌档案。"); return; }
+    if (!launchActiveCards.length) { setError("所选品牌档案还没有有效资料，请先确认入档材料。"); return; }
+    if (!launchDirection) { setError("所选品牌档案还没有确定品牌路线，请先完成定调。"); return; }
     if (!launchPrompt.trim()) { setError("先写下一句灵感或你希望被看见的画面。"); return; }
     setBusy(true); setError(null);
     try {
@@ -249,6 +274,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     finally { setBusy(false); }
   }
   const navigate = (next: Screen) => {
+    if (next === "launch" && screen !== "launch") { setLaunchArchiveId(null); setLaunchInspiration(null); setGenerationPreview(null); }
     if (!project && next !== "setup") {
       setScreen(next);
       return;
@@ -271,12 +297,12 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       {screen === "candidates" && <Candidates candidates={candidates} confirmed={confirmedCount} busy={busy} onResolve={resolveCandidate} onContinue={confirmChronicle} />}
       {screen === "project-directory" && <ProjectDirectory projects={projectDirectory} onSelect={openProject} onCreate={() => setScreen("setup")} />}
       {screen === "archive" && workspace && <BrandMaterials workspace={workspace} onOpenArchive={() => setArchiveModal("cards")} onOpenManual={() => setScreen("manual")} onOpenRecords={() => setScreen("assets")} />}
-      {screen === "assets" && workspace && <AssetHistory workspace={workspace} onBack={() => setScreen("archive")} onLaunch={() => setScreen("launch")} />}
+      {screen === "assets" && workspace && <AssetHistory workspace={workspace} onBack={() => setScreen("archive")} onLaunch={() => navigate("launch")} />}
       {screen === "chronicle" && workspace && <Chronicle workspace={workspace} task={latestRouteTask} onRetry={retryTask} onOpenArchive={() => setArchiveModal("cards")} />}
       {screen === "directions" && workspace && <Directions directions={workspace.directions} claims={workspace.claims ?? []} current={currentDirection} routeTask={latestRouteTask} manualTask={latestManualTask} busy={busy} onGenerate={createDirections} onRetry={retryTask} onPreview={setDirectionDraft} onOpenManual={() => setScreen("manual")} />}
       {screen === "manual" && workspace && <BrandManualResult workspace={workspace} manualTask={latestManualTask} exportTask={workspace.tasks?.find((item) => item.kind === "export")} demoMode={demoMode} onRetry={retryTask} onOpenArchive={() => setScreen("archive")} onNext={() => setScreen("tide")} />}
-      {screen === "tide" && workspace && <Tide report={tideReport} demoMode={demoMode} busy={busy} onFavorite={favoriteTideIdea} onUse={useTideIdea} onNext={() => setScreen("launch")} />}
-      {screen === "launch" && workspace && <Launch jobs={latestJobs} inspiration={launchInspiration ?? undefined} busy={busy} prompt={launchPrompt} type={launchType} preview={generationPreview} onPromptChange={setLaunchPrompt} onTypeChange={setLaunchType} onPreview={previewLaunch} onSavePreview={saveLaunchPreview} onClosePreview={() => setGenerationPreview(null)} onOpenRecords={() => setScreen("assets")} />}
+      {screen === "tide" && workspace && <Tide report={tideReport} demoMode={demoMode} busy={busy} onFavorite={favoriteTideIdea} onUse={useTideIdea} onNext={() => navigate("launch")} />}
+      {screen === "launch" && workspace && <Launch workspace={launchWorkspace ?? undefined} projects={projectDirectory} inspiration={launchWorkspace ? launchInspiration ?? undefined : undefined} busy={busy} prompt={launchPrompt} type={launchType} preview={generationPreview} ready={launchReady} visualAssetCount={launchVisualAssetCount} pickerOpen={launchArchivePickerOpen} onPromptChange={setLaunchPrompt} onTypeChange={setLaunchType} onOpenPicker={() => setLaunchArchivePickerOpen(true)} onClosePicker={() => setLaunchArchivePickerOpen(false)} onSelectArchive={selectLaunchArchive} onPreview={previewLaunch} onSavePreview={saveLaunchPreview} onClosePreview={() => setGenerationPreview(null)} onOpenRecords={() => setScreen("assets")} />}
       {archiveModal === "cards" && workspace && <ArchiveFolioDialog project={workspace.project} cards={workspace.archive_cards} onClose={() => setArchiveModal(null)} onEdit={(card) => { setEditing(card); setArchiveModal(null); }} />}
       {directionDraft && workspace && <DirectionDraftDialog project={workspace.project} direction={directionDraft} busy={busy} onClose={() => setDirectionDraft(null)} onConfirm={async () => { if (await selectDirection(directionDraft.id)) setDirectionDraft(null); }} />}
       {editing && <div className="modal-backdrop"><section className="finish-dialog" role="dialog" aria-modal="true"><p className="eyebrow">编辑档案</p><input value={editing.title} onChange={(event) => setEditing({ ...editing, title: event.target.value })} /><textarea value={editing.content} onChange={(event) => setEditing({ ...editing, content: event.target.value })} /><footer><button className="secondary-button" onClick={() => setEditing(null)}>取消</button><button className="primary-button" disabled={busy} onClick={saveCard}>保存</button></footer></section></div>}
@@ -324,15 +350,25 @@ function Tide({ report, demoMode, busy, onFavorite, onUse, onNext }: { report: T
   return <section className="stage-page tide-page"><StageHeader eyebrow="观潮 / 本周观察" title="把行业变化，转译成可判断的创意角度" copy="每周一 09:00 自动检索、验链并更新；趋势不改写品牌事实，只作为出山的表达参考。" /><div className="tide-ledger"><span>行业与社媒扫描</span><i /><span>逐条验链</span><i /><span>节日语境</span><i /><span>选择灵感</span></div><div className="stage-toolbar tide-status"><span>{status}</span><small>无手动刷新</small></div>{edition?.ideas.length ? <div className="inspiration-grid">{edition.ideas.map((idea, index) => <article className="inspiration-card tide-report-card" key={idea.id}><header><p className="eyebrow">灵感 {String(index + 1).padStart(2, "0")}</p><time>{idea.festival_context}</time></header><h2>{idea.theme}</h2><p>{idea.content_motif}</p><dl className="tide-idea-meta"><dt>适用场景</dt><dd>{idea.applicable_scene}</dd><dt>来源账本</dt><dd>{idea.sources.map((source) => <a href={source.source_url} target="_blank" rel="noreferrer" key={source.id}><span>{channelLabel[source.channel]} · {source.publisher}</span>{source.source_title} <em>{source.published_at ?? "时间未知"} ↗</em></a>)}</dd></dl><footer><div><button className="text-button" disabled={busy} onClick={() => onFavorite(idea.id)}>{idea.favorite ? "已收藏" : "收藏灵感"}</button><span>{idea.risk_note}</span></div><button className="secondary-button" disabled={busy} onClick={() => onUse(idea)}>用此灵感出山</button></footer></article>)}</div> : <Empty title={demoMode ? "演示模式不展示模拟热点；真实服务启用后将自动出现本周周报。" : "本周还没有足够的可验证来源；不会显示伪造趋势。"} /> }<footer className="stage-next"><button className="primary-button" onClick={onNext}>不选灵感，直接出山</button></footer></section>;
 }
 
-function Launch({ jobs, inspiration, busy, prompt, type, preview, onPromptChange, onTypeChange, onPreview, onSavePreview, onClosePreview, onOpenRecords }: { jobs: Job[]; inspiration?: Inspiration; busy: boolean; prompt: string; type: "peripheral" | "xiaohongshu"; preview: GenerationPreview | null; onPromptChange: (value: string) => void; onTypeChange: (value: "peripheral" | "xiaohongshu") => void; onPreview: () => void; onSavePreview: () => void; onClosePreview: () => void; onOpenRecords: () => void }) {
+function Launch({ workspace, projects, inspiration, busy, prompt, type, preview, ready, visualAssetCount, pickerOpen, onPromptChange, onTypeChange, onOpenPicker, onClosePicker, onSelectArchive, onPreview, onSavePreview, onClosePreview, onOpenRecords }: { workspace?: Workspace; projects: Project[]; inspiration?: Inspiration; busy: boolean; prompt: string; type: "peripheral" | "xiaohongshu"; preview: GenerationPreview | null; ready: boolean; visualAssetCount: number; pickerOpen: boolean; onPromptChange: (value: string) => void; onTypeChange: (value: "peripheral" | "xiaohongshu") => void; onOpenPicker: () => void; onClosePicker: () => void; onSelectArchive: (project: Project) => void; onPreview: () => void; onSavePreview: () => void; onClosePreview: () => void; onOpenRecords: () => void }) {
+  const activeCards = workspace?.archive_cards.filter((card) => card.status === "active") ?? [];
+  const direction = workspace?.directions.find((item) => item.state === "current");
+  const readinessMessage = !workspace ? "请先选择本次出山要使用的品牌档案。" : !activeCards.length ? "该档案尚无有效资料，请先确认入档材料。" : !direction ? "该档案尚未确定品牌路线，请先完成定调。" : "档案与路线已就绪，可开始生成预览。";
   return <section className="stage-page launch-page">
-    <header className="launch-header"><div><p className="eyebrow">出山</p><h1>让整理好的风物，长成能被看见的东西</h1><p>先说一句你想让人看见的画面，再选择它该成为图文还是一份周边设计稿。</p></div><button className="primary-button launch-record-button" onClick={onOpenRecords}>打开出山记录 →</button></header>
+    <header className="launch-header"><div><p className="eyebrow">出山</p><h1>让整理好的风物，长成能被看见的东西</h1><p>选择一份品牌档案，再将它转译为可继续讨论的图文或物料概念。</p></div><button className="primary-button launch-record-button" disabled={!workspace} onClick={onOpenRecords}>打开出山记录 →</button></header>
     {inspiration && <p className="selected-inspiration">已纳入本次输入的观潮灵感：{inspiration.source_title}</p>}
-    <section className="launch-conversation" aria-label="出山对话"><header><p className="eyebrow">出山对话</p><a href="#launch-type">选择生成类型 ↓</a><h2>这次想让哪一部分先被看见？</h2></header><div className="launch-thread"><span className="launch-thread-mark" aria-hidden="true">✦</span><p>可以从一幅画面、一句标题，或一个你想先试试的表达开始。它只会作为创意方向，不会改写品牌档案里的事实。</p></div><label className="launch-composer"><span className="sr-only">输入出山灵感</span><textarea value={prompt} maxLength={1200} onChange={(event) => onPromptChange(event.target.value)} placeholder="例如：想把“先喝一口酸，再出门见山”做成适合夏日的图文" /><button className="primary-button" disabled={busy || !prompt.trim()} onClick={onPreview}>{busy ? "正在生成预览…" : "生成预览 →"}</button></label><small>{prompt.length} / 1,200 · 预览不会自动归档</small></section>
+    <section className="launch-conversation" aria-label="出山输入"><header><p className="eyebrow">出山输入</p><a href="#launch-type">选择生成类型 ↓</a></header><div className="launch-archive-bar"><div><p className="eyebrow">品牌档案</p><strong>{workspace?.project.brand_name ?? "尚未选择"}</strong><small>{workspace ? `${activeCards.length} 张有效资料 · ${direction ? `已选路线：${direction.title}` : "待选择品牌路线"} · ${visualAssetCount} 项手册视觉资产（本轮不带入生成）` : "选择后才会把对应档案与需求一起用于本次生成。"}</small></div><button className="secondary-button" type="button" onClick={onOpenPicker} disabled={busy}>{workspace ? "更换品牌档案" : "选择品牌档案"}</button></div><p className={`launch-readiness ${ready ? "is-ready" : ""}`} role="status">{readinessMessage}</p><label className="launch-composer"><span className="sr-only">输入出山需求</span><textarea value={prompt} maxLength={1200} onChange={(event) => onPromptChange(event.target.value)} placeholder={workspace ? "写下想让人看见的画面、标题或表达；它只会作为创意方向，不会改写品牌档案里的事实。" : "请先选择品牌档案；随后可从一幅画面、一句标题或一个想尝试的表达开始。"} /><button className="primary-button" disabled={busy || !ready || !prompt.trim()} onClick={onPreview}>{busy ? "正在生成预览…" : "生成预览 →"}</button></label><small>{prompt.length} / 1,200 · 预览不会自动归档</small></section>
     <section className="launch-types" id="launch-type"><button className={`launch-type-card peripheral ${type === "peripheral" ? "is-selected" : ""}`} onClick={() => onTypeChange("peripheral")}><span>出山方向 01</span><strong>实体物料设计</strong><small>包装概念、周边单页、品牌卡片与陈列资料。</small><i aria-hidden="true">◒</i></button><button className={`launch-type-card social ${type === "xiaohongshu" ? "is-selected" : ""}`} onClick={() => onTypeChange("xiaohongshu")}><span>出山方向 02</span><strong>线上图文生成</strong><small>小红书封面概念、标题、正文与话题结构。</small><i aria-hidden="true">✦</i></button></section>
-    {jobs.length ? <section className="launch-saved-note"><p>已有 {jobs.length} 份已保存产物</p><button className="text-button" onClick={onOpenRecords}>查看全部记录</button></section> : null}
+    {workspace?.generation_jobs.length ? <section className="launch-saved-note"><p>已有 {workspace.generation_jobs.length} 份已保存产物</p><button className="text-button" onClick={onOpenRecords}>查看全部记录</button></section> : null}
+    {pickerOpen && <LaunchArchivePicker projects={projects} selectedId={workspace?.project.id} busy={busy} onClose={onClosePicker} onSelect={onSelectArchive} />}
     {preview && <LaunchPreviewModal preview={preview} busy={busy} onClose={onClosePreview} onSave={onSavePreview} />}
   </section>;
+}
+
+function LaunchArchivePicker({ projects, selectedId, busy, onClose, onSelect }: { projects: Project[]; selectedId?: string; busy: boolean; onClose: () => void; onSelect: (project: Project) => void }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { closeRef.current?.focus(); const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", closeOnEscape); return () => window.removeEventListener("keydown", closeOnEscape); }, [onClose]);
+  return <div className="archive-modal-backdrop launch-archive-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="launch-archive-dialog" role="dialog" aria-modal="true" aria-labelledby="launch-archive-title"><header><div><p className="eyebrow">品牌档案</p><h2 id="launch-archive-title">选择本次出山的品牌档案</h2><p>本次生成只会使用你选定项目的有效资料与当前品牌路线。</p></div><button className="modal-close" ref={closeRef} aria-label="关闭品牌档案选择" onClick={onClose}>×</button></header><div className="launch-archive-list">{projects.length ? projects.map((item) => <button type="button" className={`launch-archive-option ${item.id === selectedId ? "is-selected" : ""}`} key={item.id} disabled={busy} onClick={() => onSelect(item)}><span>{item.industry || "档"}</span><div><small>{item.origin || "产地待补"} · {item.core_product || "产品待补"}</small><strong>{item.brand_name}</strong></div><b>{item.id === selectedId ? "已选择" : "用于出山 →"}</b></button>) : <p className="launch-archive-empty">还没有可选择的品牌档案。请先完成采风并确认材料。</p>}</div></section></div>;
 }
 
 function LaunchPreviewModal({ preview, busy, onClose, onSave }: { preview: GenerationPreview; busy: boolean; onClose: () => void; onSave: () => void }) {

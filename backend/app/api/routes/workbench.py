@@ -528,6 +528,8 @@ def launch_brief(context: dict[str, Any], template_type: str, inspiration_text: 
 
 def generation_context(connection: Any, project_id: str, inspiration_card_id: str | None) -> dict[str, Any]:
     context = project_context(connection, project_id)
+    if not context["archive_cards"]:
+        fail(422, "请先确认至少一张有效档案卡", "archive_required")
     current = row_dict(connection.execute("SELECT * FROM brand_directions WHERE id = ?", (context["project"].get("current_direction_id"),)).fetchone())
     if not current:
         fail(422, "请先选择一条品牌路线", "direction_required")
