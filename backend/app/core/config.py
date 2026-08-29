@@ -36,11 +36,8 @@ class Settings(BaseSettings):
     openai_next_image_base_url: str = "https://draw.openai-next.com/v1"
     openai_next_image_api_key: str = ""
     openai_next_image_model: str = "gpt-image-2"
+    openai_next_image_size: str = "896x1184"
     provider_timeout_seconds: int = 120
-    # Brand-direction and brand-visual jobs are persisted and run in the
-    # background, so they can safely wait for slower model gateways.  `None`
-    # (or a configured value of 0) deliberately disables the client deadline.
-    brand_generation_timeout_seconds: int | None = None
     tide_refresh_interval_seconds: int = 60
     tide_source_verify_timeout_seconds: int = 12
     tide_source_max_results: int = 30
@@ -69,14 +66,6 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on", "development", "debug"}
-
-    @field_validator("brand_generation_timeout_seconds", mode="before")
-    @classmethod
-    def normalize_brand_generation_timeout(cls, value: int | str | None) -> int | None:
-        if value is None or (isinstance(value, str) and not value.strip()):
-            return None
-        seconds = int(value)
-        return seconds if seconds > 0 else None
 
     @property
     def resolved_image_api_key(self) -> str:

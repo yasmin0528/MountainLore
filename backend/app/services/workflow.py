@@ -288,10 +288,6 @@ def _generate_routes(task: dict[str, Any]) -> dict[str, Any]:
                 "claimIds只能使用输入 claims 的 id；无依据的表达不得伪装成事实，必须留空claimIds并写入evidenceGaps。"
             ),
             context=snapshot,
-            # Brand routes are a persisted background task: wait for a slow
-            # gateway instead of turning a still-running request into a
-            # misleading "generation incomplete" result.
-            timeout=provider.brand_generation_timeout,
         )
         routes = _validate_routes(result.get("routes"), snapshot)
         mode = "live"
@@ -404,10 +400,7 @@ def create_manual_skeleton(project_id: str, snapshot: dict[str, Any]) -> dict[st
     return {"manual_version_id": version_id, "content": content, "created": True}
 
 
-def _save_image_asset(
-    project_id: str, version_id: str, kind: str, result: dict[str, str], prompt: str,
-    *, timeout: httpx.Timeout | None = None,
-) -> str:
+def _save_image_asset(project_id: str, version_id: str, kind: str, result: dict[str, str], prompt: str) -> str:
     asset_id = new_id()
     suffix = ".png"
     relative_key = f"{project_id}/generated/{asset_id}{suffix}"
@@ -417,7 +410,7 @@ def _save_image_asset(
         provider.write_base64_image(result["value"], str(target))
     elif result["kind"] == "url":
         try:
-            response = httpx.get(result["value"], timeout=timeout, follow_redirects=True)
+            response = httpx.get(result["value"], timeout=60, follow_redirects=True)
             response.raise_for_status()
             target.write_bytes(response.content)
         except httpx.HTTPError as exc:
@@ -465,11 +458,7 @@ def _generate_manual_asset(task: dict[str, Any]) -> dict[str, Any]:
     _task_update(task["id"], progress=45)
     if not provider.live:
         raise ProviderError("demo_mode", "演示模式不生成图片")
-    timeout = provider.brand_generation_timeout
-    asset_id = _save_image_asset(
-        task["project_id"], version_id, asset_kind,
-        provider.generate_image(prompts[asset_kind], timeout=timeout), prompts[asset_kind], timeout=timeout,
-    )
+    asset_id = _save_image_asset(task["project_id"], version_id, asset_kind, provider.generate_image(prompts[asset_kind], negative_prompt=route.get("negative_prompt")), prompts[asset_kind])
     _task_update(task["id"], progress=90)
     return {"manual_version_id": version_id, "asset_kind": asset_kind, "asset_id": asset_id}
 
@@ -564,11 +553,7 @@ def _generate_manual(task: dict[str, Any]) -> dict[str, Any]:
         missing_prompts = [(kind, prompt) for kind, prompt in prompts.items() if kind not in existing_kinds]
         for offset, (kind, prompt) in enumerate(missing_prompts, start=1):
             try:
-                timeout = provider.brand_generation_timeout
-                asset_ids.append(_save_image_asset(
-                    task["project_id"], version_id, kind,
-                    provider.generate_image(prompt, timeout=timeout), prompt, timeout=timeout,
-                ))
+                asset_ids.append(_save_image_asset(task["project_id"], version_id, kind, provider.generate_image(prompt, negative_prompt=route.get("negative_prompt")), prompt))
             except ProviderError as exc:
                 image_errors.append({"kind": kind, "code": exc.code, "message": str(exc)})
             _task_update(task["id"], progress=55 + offset * 12)
