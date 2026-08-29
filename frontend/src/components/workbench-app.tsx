@@ -202,12 +202,11 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       void api<{ data: Workspace }>(`/projects/${project.id}/workspace`)
         .then((response) => {
           setWorkspace(response.data); setProject(response.data.project); setSession(response.data.session ?? null);
-          if (["manual", "chronicle"].includes(screen) && response.data.directions.filter((item) => item.state !== "superseded").length >= 3) setScreen("manual");
         })
         .catch((caught) => setError(errorText(caught)));
     }, 1200);
     return () => window.clearInterval(timer);
-  }, [activeWorkflowTask, demoMode, project, screen]);
+  }, [activeWorkflowTask, demoMode, project]);
 
   const loadTideReport = useCallback(async () => {
     if (!visitorReady) return;
@@ -552,8 +551,9 @@ function Chronicle({ workspace, task, onRetry, onOpenArchive, onContinueToning }
   const generating = Boolean(task && ["queued", "running"].includes(task.status));
   const title = routesReady ? "编志完成，进入定调" : generating ? "正在编志与生成品牌路线" : "编志完成，接下来定调";
   const copy = routesReady ? "档案已沉淀为可定调的品牌资料。选择一版方向后，将据此生成品牌手册。" : generating ? "系统正在基于已确认的档案整理品牌故事与品牌方向。" : "档案与事实已冻结保存；补充 Logo、字体与颜色后，系统会生成三版品牌方向供你挑选。";
-  const hint = generating ? "品牌路线正在生成，完成后可直接挑选方向。" : "品牌方向与手册会进入品牌档案中的「品牌手册」，之后可随时回来继续。";
-  return <section className="stage-page chronicle-page"><StageHeader eyebrow="采风完成 / 编志" title={title} copy={copy} /><div className="stage-toolbar"><span>{activeCount} 张有效档案 · {publicCount} 条可公开事实</span><button className="secondary-button" onClick={onOpenArchive}>回看故事卡片与来源</button></div><TaskStatus task={task} onRetry={onRetry} /><footer className="stage-next"><p>{hint}</p><button className="primary-button" onClick={onContinueToning}>{generating ? "查看定调进度 →" : "继续定调 →"}</button></footer></section>;
+  const hint = routesReady ? "三条品牌路线已生成。比较后选择一条，系统会据此创建品牌手册。" : generating ? "品牌路线正在生成，完成后可直接挑选方向。" : "品牌方向与手册会进入品牌档案中的「品牌手册」，之后可随时回来继续。";
+  const actionLabel = routesReady ? "选择路线方案 →" : generating ? "查看定调进度 →" : "继续定调 →";
+  return <section className="stage-page chronicle-page"><StageHeader eyebrow="采风完成 / 编志" title={title} copy={copy} /><div className="stage-toolbar"><span>{activeCount} 张有效档案 · {publicCount} 条可公开事实</span><button className="secondary-button" onClick={onOpenArchive}>回看故事卡片与来源</button></div><TaskStatus task={task} onRetry={onRetry} /><footer className="stage-next"><p>{hint}</p><button className="primary-button" onClick={onContinueToning}>{actionLabel}</button></footer></section>;
 }
 
 function archiveDate(value?: string) { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(value)) : "时间待补"; }
