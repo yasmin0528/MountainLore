@@ -462,7 +462,7 @@ export default function WorkbenchApp() {
         <button type="button" className="mobile-drawer-mark" aria-label="收起导航菜单" onClick={() => closeMobileNav()}>贵</button>
         <div><span>数字田野志</span><strong>贵品风物志</strong></div>
       </div>
-      <div className="brand-lockup"><span>贵品</span><div><strong>贵品风物志</strong></div></div><p className="sidebar-label">品牌工作台</p>
+      <div className="brand-lockup"><span>贵</span><div><strong>贵品风物志</strong></div></div><p className="sidebar-label">品牌工作台</p>
       <nav aria-label="主导航">
         {primaryScreens.map((item) => <button key={item.key} className={`stage ${isPrimaryActive(item.key) ? "stage-current" : ""}`} onClick={() => item.key === "fieldwork" ? openFieldwork() : navigate(item.key)}><span className="stage-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span></button>)}
         <button type="button" className={`stage mobile-archive-stage ${["project-directory", "archive", "assets"].includes(screen) ? "stage-current" : ""}`} onClick={() => navigate("project-directory")}><span className="stage-icon" aria-hidden="true">▱</span><span>档案</span></button>

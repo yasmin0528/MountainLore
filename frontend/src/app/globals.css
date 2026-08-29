@@ -99,7 +99,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 @media(max-width:700px){.manual-generation-page,.brand-manual-result-page{padding:28px 16px 56px}.manual-generation-header,.brand-manual-result-header{align-items:start;flex-direction:column;gap:12px}.manual-generation-header h1,.brand-manual-result-header h1{font-size:28px}.manual-progress-panel{margin:24px 0;padding:21px 18px}.manual-progress-panel>div{align-items:start;flex-direction:column}.brand-manual-result-paper{margin-top:20px;padding:26px 20px;box-shadow:4px 5px 0 rgba(61,73,61,.15)}.brand-manual-result-paper p{font-size:14px;line-height:1.78}.manual-result-brand{font-size:24px!important}.manual-result-slogan{font-size:19px!important}.manual-result-gallery>div{grid-template-columns:1fr}.manual-result-asset{min-height:0}.manual-result-asset>img,.manual-result-asset>div{height:190px}.brand-manual-delivery{grid-template-columns:1fr;align-items:stretch;margin-top:20px}.brand-manual-delivery>.primary-button{width:100%}}
 
 /* Shared workspace contract: a stable desktop rail and one sizing rule for product stickers. */
-:root{--product-sticker-size:46px}
+:root{--product-sticker-size:58px}
 .app-shell{align-items:start}
 .sidebar{position:sticky;top:0;align-self:start;height:100dvh;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
 .brand-lockup>span{font-size:12px;letter-spacing:0}
@@ -158,7 +158,7 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 
   .mobile-drawer-head{display:flex;align-items:center;gap:8px;min-width:0;padding:0 0 15px;border-bottom:1px solid rgba(255,253,247,.28)}
   .mobile-drawer-mark,.mobile-project-mark{display:grid;place-items:center;flex:0 0 36px;width:36px;height:36px;padding:0;border:1px solid rgba(247,241,224,.82);border-radius:50%;background:transparent;color:var(--paper-high);font:600 15px/1 "Noto Serif SC",STSong,serif}
-  .mobile-drawer-head>div{display:grid;min-width:0;gap:1px}.mobile-drawer-head span{color:rgba(255,253,247,.66);font-size:9px;letter-spacing:.06em}.mobile-drawer-head strong{overflow:hidden;color:var(--paper-high);font:500 14px/1.35 "Noto Serif SC",STSong,serif;text-overflow:ellipsis;white-space:nowrap}
+  .mobile-drawer-head>div{display:grid;min-width:0;gap:1px}.mobile-drawer-head span{color:rgba(255,253,247,.66);font-size:9px;letter-spacing:.06em}.mobile-drawer-head strong{overflow:hidden;color:var(--paper-high);font:500 18px/1.35 "Noto Serif SC",STSong,serif;text-overflow:ellipsis;white-space:nowrap}
   .sidebar .brand-lockup,.sidebar .sidebar-label{display:none}
   .sidebar nav{display:flex!important;flex:1;flex-direction:column;gap:0!important;margin-top:14px}
   .sidebar .stage,.sidebar .mobile-archive-stage{display:flex!important;align-items:center;gap:10px;min-height:49px;padding:9px 3px;border:0;border-bottom:1px solid rgba(255,253,247,.24);background:transparent;box-shadow:none;color:rgba(250,247,239,.72);font-size:14px;text-align:left}
@@ -265,3 +265,57 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 @keyframes candidate-source-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.candidate-research-wait i{animation:none}}
 @media (max-width:760px){.candidate-research-wait{margin:22px 0;padding:18px}.candidate-sources li{padding:9px}.candidate-sources a{overflow-wrap:anywhere}}
+/* Shared desktop reading plane: 观潮的 1120px 版心 is the common measure for 采风、观潮与出山。 */
+:root{--workspace-content-width:1120px;--workspace-desktop-gutter:56px}
+@media(min-width:768px){
+  .workspace{position:relative;isolation:isolate;max-width:none;padding:44px var(--workspace-desktop-gutter) 72px;background-color:var(--paper);background-image:url("/guipin/assets/archive-paper-texture-v1.png");background-repeat:repeat;background-size:640px 640px}
+  .workspace::before{content:"";position:absolute;z-index:0;right:0;bottom:0;left:0;height:min(34vw,420px);pointer-events:none;opacity:.32;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 420' preserveAspectRatio='none'%3E%3Cg fill='none' stroke='%23708067' stroke-width='1.2' opacity='.62'%3E%3Cpath d='M-70 396 C95 306 178 332 286 258 S505 306 632 212 S832 266 948 170 S1160 227 1280 124 S1485 192 1670 60'/%3E%3Cpath d='M-80 416 C80 337 182 365 298 288 S514 336 646 240 S843 297 965 195 S1183 246 1303 147 S1505 211 1680 84'/%3E%3Cpath d='M-25 364 C102 270 192 304 272 222 S491 284 615 184 S823 244 923 142 S1155 200 1264 94 S1497 156 1655 36'/%3E%3Cpath d='M38 420 C132 373 211 392 333 330 S533 384 673 296 S856 348 1004 251 S1194 307 1350 212 S1537 259 1645 204'/%3E%3C/g%3E%3C/svg%3E");background-repeat:no-repeat;background-position:center bottom;background-size:100% 100%}
+  .workspace>*,.workspace>header{position:relative;z-index:1}
+  .setup-page,.candidate-page,.tide-page,.launch-page,.interview-header,.interview-layout{width:100%;max-width:var(--workspace-content-width);margin-right:auto;margin-left:auto}
+  .setup-page .page-header,.candidate-page .page-header,.tide-page .page-header{max-width:var(--workspace-content-width);margin-right:auto;margin-left:auto}
+  .setup-page .page-header>p:last-child,.candidate-page .page-header>p:last-child,.tide-page .page-header>p:last-child{max-width:720px}
+  .setup-page .field-form{max-width:var(--workspace-content-width)}
+  .launch-page{padding:0 0 72px}
+  .launch-header{padding-top:0}
+  .candidate-page{max-width:var(--workspace-content-width)}
+}
+
+/* Keep the established sidebar surface while using Song-style navigation typography. */
+@media(min-width:768px){
+  .sidebar .stage,.sidebar .stage-icon{font-family:"Noto Serif SC",STSong,"Songti SC",SimSun,serif}
+}
+
+@media(max-width:767px){
+  .workspace{background-color:var(--paper);background-image:url("/guipin/assets/archive-paper-texture-v1.png");background-repeat:repeat;background-size:520px 520px}
+}
+
+/* Mobile header shares the indigo mountain material used by the navigation drawer. */
+@media(max-width:767px){
+  .mobile-workspace-bar{border-bottom-color:rgba(255,253,247,.3);background-color:#103b4d;background-image:url("/guipin/assets/indigo-mountain-batik-mobile-v1.png");background-size:cover;background-position:center;background-repeat:no-repeat}
+  .mobile-workspace-title strong{color:var(--paper-high)}
+  .mobile-workspace-title small{color:rgba(255,253,247,.72)}
+  .mobile-project-mark{border-color:rgba(255,253,247,.82);background:rgba(15,59,77,.42);color:var(--paper-high)}
+}
+
+/* Desktop brand mark matches the compact mobile drawer header. */
+@media(min-width:768px){
+  .sidebar .brand-lockup{gap:8px;margin-bottom:32px;padding:0 2px 15px;border-bottom:1px solid rgba(255,253,247,.28)}
+  .sidebar .brand-lockup>span{width:36px;height:36px;border-color:rgba(247,241,224,.82);background:transparent;box-shadow:none;color:var(--paper-high);font:600 15px/1 "Noto Serif SC",STSong,serif}
+  .sidebar .brand-lockup>div{display:grid;min-width:0}
+  .sidebar .brand-lockup strong{color:var(--paper-high);font:500 18px/1.35 "Noto Serif SC",STSong,serif}
+}
+
+@media(min-width:768px){
+  .sidebar .brand-lockup>span{border-radius:50%}
+}
+
+/* Give desktop product selection stickers a more legible, tactile scale. */
+@media(min-width:768px){
+  .product-options{gap:12px}
+  .product-option{width:108px;min-height:110px;padding:8px}
+  .product-option img{width:72px;height:72px}
+  .product-option span{font-size:12px}
+}
+
+/* The archival paper surface continues to the full height of the right-hand workspace. */
+.workspace{min-height:100dvh}
