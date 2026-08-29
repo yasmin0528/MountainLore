@@ -201,12 +201,11 @@ export default function WorkbenchApp() {
       void api<{ data: Workspace }>(`/projects/${project.id}/workspace`)
         .then((response) => {
           setWorkspace(response.data); setProject(response.data.project); setSession(response.data.session ?? null);
-          if (screen === "manual" && response.data.directions.filter((item) => item.state !== "superseded").length >= 3) setScreen("manual");
         })
         .catch((caught) => setError(errorText(caught)));
     }, 1200);
     return () => window.clearInterval(timer);
-  }, [activeWorkflowTask, project, screen]);
+  }, [activeWorkflowTask, project]);
 
   useEffect(() => {
     if (screen !== "candidates" || !project || !cultureResearchTask || !["queued", "running"].includes(cultureResearchTask.status)) return;
@@ -367,8 +366,8 @@ export default function WorkbenchApp() {
 
   async function deleteCard(card: ArchiveCard): Promise<boolean> { setBusy(true); setError(null); try { await api(`/archive-cards/${card.id}`, { method: "DELETE" }); await refreshWorkspace(); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
   async function saveCard(card: ArchiveCard): Promise<boolean> { setBusy(true); setError(null); try { await api(`/archive-cards/${card.id}`, { method: "PATCH", body: JSON.stringify({ title: card.title, content: card.content, expected_content_version: card.content_version }) }); await refreshWorkspace(); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
-  async function createDirections(preferences?: ManualVisualPreferences) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/directions`, { method: "POST", headers: { "Idempotency-Key": createRequestId("directions") }, body: JSON.stringify({ visual_preferences: preferences ?? {} }) }); await refreshWorkspace(); setScreen("chronicle"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
-  async function confirmChronicle() { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/chronicle/confirm`, { method: "POST", headers: { "Idempotency-Key": `chronicle-${project.id}` }, body: JSON.stringify({ request_id: "initial", defer_directions: true }) }); await refreshWorkspace(); setScreen("manual"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
+  async function createDirections(preferences?: ManualVisualPreferences) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/directions`, { method: "POST", headers: { "Idempotency-Key": createRequestId("directions") }, body: JSON.stringify({ visual_preferences: preferences ?? {} }) }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
+  async function confirmChronicle() { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/chronicle/confirm`, { method: "POST", headers: { "Idempotency-Key": `chronicle-${project.id}` }, body: JSON.stringify({ request_id: "initial", defer_directions: true }) }); await refreshWorkspace(); setScreen("chronicle"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
   async function saveManual(content: Record<string, unknown>) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/brand-manual`, { method: "PATCH", body: JSON.stringify({ content_json: content }) }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
   async function retryTask(id: string) { try { await api(`/tasks/${id}/retry`, { method: "POST" }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } }
   async function generateManualAsset(kind: "extension_pattern" | "packaging_key_visual") { if (!project) return; try { await api(`/projects/${project.id}/brand-manual/generate-assets/${kind}`, { method: "POST", headers: { "Idempotency-Key": createRequestId(`asset-${kind}`) } }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } }
@@ -481,7 +480,7 @@ export default function WorkbenchApp() {
       {screen === "project-directory" && <ProjectDirectory projects={projectDirectory} onSelect={openProject} onDelete={(item) => setDeleteTarget(item)} onCreate={() => { setIsTrialCase(false); setScreen("setup"); }} />}
       {screen === "archive" && workspace && <BrandMaterials workspace={workspace} onOpenArchive={() => setArchiveModal("cards")} onOpenManual={() => setScreen("manual")} onOpenRecords={() => setScreen("assets")} />}
       {screen === "assets" && workspace && <AssetHistory workspace={workspace} onBack={() => setScreen("archive")} onLaunch={() => navigate("launch")} />}
-      {screen === "chronicle" && workspace && <Chronicle workspace={workspace} task={latestRouteTask} onRetry={retryTask} onOpenArchive={() => setArchiveModal("cards")} />}
+      {screen === "chronicle" && workspace && <Chronicle workspace={workspace} task={latestRouteTask} onRetry={retryTask} onOpenArchive={() => setArchiveModal("cards")} onContinueToning={() => setScreen("manual")} />}
       {screen === "directions" && workspace && <Directions directions={workspace.directions} claims={workspace.claims ?? []} current={currentDirection} manual={workspace.manual} routeTask={latestRouteTask} busy={busy} onGenerate={createDirections} onRetry={retryTask} onPreview={setDirectionDraft} onOpenManual={() => setScreen("manual")} />}
       {screen === "manual" && workspace && <BrandManualResult key={workspace.manual?.current_version_id ?? workspace.project.status ?? "manual-setup"} workspace={workspace} logoTask={latestLogoTask} patternTask={latestPatternTask} exportTask={workspace.tasks?.find((item) => item.kind === "export")} busy={busy} onGenerate={createDirections} onSelect={selectDirection} onSave={saveManual} onRefresh={refreshWorkspace} onRetry={retryTask} onGenerateAsset={generateManualAsset} onFailure={setError} onOpenArchive={() => setScreen("archive")} onNext={() => setScreen("tide")} />}
       {screen === "tide" && workspace && <Tide report={tideReport} busy={busy} onRefresh={refreshTideReport} onFavorite={favoriteTideIdea} onUse={useTideIdea} onNext={() => setScreen("launch")} />}
@@ -551,8 +550,16 @@ function TaskStatus({ task, onRetry }: { task?: WorkflowTask; onRetry: (id: stri
   return <section className={`workflow-task ${task.status}`} role="status"><div><b>{label}</b><small>任务 {task.id.slice(0, 8)} · 刷新页面不会丢失</small></div><progress max={100} value={task.progress ?? 0} />{["failed", "partial"].includes(task.status) && <button className="secondary-button" onClick={() => onRetry(task.id)}>重试未完成阶段</button>}</section>;
 }
 
-function Chronicle({ workspace, task, onRetry, onOpenArchive }: { workspace: Workspace; task?: WorkflowTask; onRetry: (id: string) => void; onOpenArchive: () => void }) {
-  return <section className="stage-page chronicle-page"><StageHeader eyebrow="采风完成 / 正在编志" title="把确认过的材料，沉淀为品牌故事卡片" copy="系统会先保存本次档案与事实；首次打开品牌手册时，再补充 Logo、字体与颜色并生成三条路线。" /><div className="stage-toolbar"><span>{workspace.archive_cards.filter((card) => card.status === "active").length} 张有效档案 · {workspace.claims?.filter((claim) => claim.public_allowed).length ?? 0} 条可公开事实</span><button className="secondary-button" onClick={onOpenArchive}>回看故事卡片与来源</button></div><TaskStatus task={task} onRetry={onRetry} /><p className="chronicle-auto-note">品牌路线与手册统一从品牌档案中的「品牌手册」进入。</p></section>;
+function Chronicle({ workspace, task, onRetry, onOpenArchive, onContinueToning }: { workspace: Workspace; task?: WorkflowTask; onRetry: (id: string) => void; onOpenArchive: () => void; onContinueToning: () => void }) {
+  const activeCount = workspace.archive_cards.filter((card) => card.status === "active").length;
+  const publicCount = workspace.claims?.filter((claim) => claim.public_allowed).length ?? 0;
+  const routesReady = workspace.directions.filter((route) => route.state !== "superseded").length >= 3;
+  const generating = Boolean(task && ["queued", "running"].includes(task.status));
+  const title = routesReady ? "编志完成，进入定调" : generating ? "正在编志与生成品牌路线" : "编志完成，接下来定调";
+  const copy = routesReady ? "档案已沉淀为可定调的品牌资料。选择一版方向后，将据此生成品牌手册。" : generating ? "系统正在基于已确认的档案整理品牌故事与品牌方向。" : "档案与事实已冻结保存；补充 Logo、字体与颜色后，系统会生成三版品牌方向供你挑选。";
+  const hint = routesReady ? "三条品牌路线已生成。比较后选择一条，系统会据此创建品牌手册。" : generating ? "品牌路线正在生成，完成后可直接挑选方向。" : "品牌方向与手册会进入品牌档案中的「品牌手册」，之后可随时回来继续。";
+  const actionLabel = routesReady ? "选择路线方案 →" : generating ? "查看定调进度 →" : "继续定调 →";
+  return <section className="stage-page chronicle-page"><StageHeader eyebrow="采风完成 / 编志" title={title} copy={copy} /><div className="stage-toolbar"><span>{activeCount} 张有效档案 · {publicCount} 条可公开事实</span><button className="secondary-button" onClick={onOpenArchive}>回看故事卡片与来源</button></div><TaskStatus task={task} onRetry={onRetry} /><footer className="stage-next"><p>{hint}</p><button className="primary-button" onClick={onContinueToning}>{actionLabel}</button></footer></section>;
 }
 
 
