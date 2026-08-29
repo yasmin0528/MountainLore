@@ -20,7 +20,7 @@ from app.fieldwork.store import connect, json_value, new_id, now, row_dict
 from app.services.providers import ProviderError, WeeklyTideIdea, WeeklyTideSource, provider
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-TIDE_EDITORIAL_VERSION = 4
+TIDE_EDITORIAL_VERSION = 5
 _ALLOWED_HOSTS = {
     "canyin88.com": ("industry", "红餐网"),
     "watcn.com": ("industry", "餐饮老板内参"),
@@ -41,6 +41,85 @@ _TRACKING_QUERY_KEYS = {"spm", "from", "source", "ref", "referrer", "campaign", 
 _TERMINAL_REPORT_STATUSES = {"succeeded", "partial"}
 _RUNNING_TIMEOUT = timedelta(minutes=10)
 _RETRY_DELAY = timedelta(seconds=60)
+_BOOTSTRAP_SHARED_WEEK_KEY = "cached-2026-08-29-editorial-v5"
+_BOOTSTRAP_SHARED_CAPTURED_AT = "2026-08-29T10:49:05+00:00"
+_ACTION_THEME_PREFIX = re.compile(r"^(?:把|为|用|做|给|将|设计|推出|策划|拍|写|开|让|借|围绕)")
+_ABSTRACT_THEME_TERMS = ("叙事", "档案", "洞察", "主题灵感", "供应链", "履约")
+_SPECIFIC_CATEGORY_TERMS = (
+    "食用菌", "菌菇", "茶叶", "粮油", "坚果", "干果", "调味品", "咖啡", "奶酪",
+    "金针菇", "真姬菇", "酱油", "辣椒", "刺梨", "腊肉", "蜂蜜", "谷物", "果汁",
+)
+# This is the last successfully verified shared edition, kept intentionally
+# small so a fresh database never starts with a blank report when live search
+# is temporarily unavailable. It is replaced by the next successful shared run.
+_BOOTSTRAP_SHARED_SOURCES = (
+    {
+        "url": "https://www.canyin88.com/zixun/2026/08/29/113154.html",
+        "channel": "industry",
+        "publisher": "红餐网",
+        "title": "90后企二代当选香飘飘副董事长；妙可蓝多进军香港市场",
+        "published_at": "2026-08-29",
+        "excerpt": "来源记录了食品企业的中秋礼盒、区域化口味研发、供应链与市场动态。",
+    },
+    {
+        "url": "https://www.canyin88.com/zixun/2026/08/29/113156.html",
+        "channel": "industry",
+        "publisher": "红餐网",
+        "title": "咖啡市场加速扩张，谁在喝？哪些场景最火？",
+        "published_at": "2026-08-29",
+        "excerpt": "来源讨论通勤、早餐、工作、居家和出行等饮品消费场景。",
+    },
+    {
+        "url": "https://www.canyin88.com/zixun/2026/08/29/113155.html",
+        "channel": "industry",
+        "publisher": "红餐网",
+        "title": "三家上市公司的命，绑在了一盘“菜”上？",
+        "published_at": "2026-08-29",
+        "excerpt": "来源讨论食用菌工厂化、供给集中、产能与价格周期。",
+    },
+    {
+        "url": "https://www.tidesight.com/news/1371277.html",
+        "channel": "industry",
+        "publisher": "观潮新消费",
+        "title": "工具物流双升级，TikTok Shop新加坡成跨境商家新支点",
+        "published_at": "2026-08-26",
+        "excerpt": "来源讨论跨区域经营工具、仓配网络与库存调配。",
+    },
+)
+_BOOTSTRAP_SHARED_IDEAS = (
+    {
+        "theme": "把中秋礼盒做成能分享的开箱仪式",
+        "content_motif": "新消费里的送礼不只看实用，也看能否被拍下、分享和留下记忆。商家可把开箱顺序、祝福卡和一项可参与的小互动做成完整体验。",
+        "applicable_scene": "用于节日礼盒、社交媒体开箱内容、私域预热与送礼页，让消费者愿意主动分享这次收到的体验。",
+        "festival_context": "中秋：2026-09-25，适合礼赠、团圆分享、企业福利等表达。",
+        "risk_note": "不得虚构礼盒已上市、销量、产地认证或检测数据；具体产地与工艺须有独立验链来源。",
+        "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113154.html",),
+    },
+    {
+        "theme": "为国庆短途出行做一套轻便尝鲜组合",
+        "content_motif": "年轻消费者会把短途出行、户外和临时相聚当作尝试新品牌的场景。商家可设计轻量、易携带、适合多人分享的尝鲜组合，而非只卖单一规格。",
+        "applicable_scene": "用于国庆出行、露营聚会、返乡探亲和伴手礼内容，突出“带上就走、一起尝尝”的体验理由。",
+        "festival_context": "国庆：2026-10-01，适合山野出行、返乡探亲、自驾携带等场景。",
+        "risk_note": "不得把咖啡市场数据直接套用于地方饮品；不得宣称提神、补给或健康功效。",
+        "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113156.html",),
+    },
+    {
+        "theme": "把产品背后的过程拍成让人安心的透明日常",
+        "content_motif": "消费者越来越在意“这件产品怎么来到我手上”。商家可用短视频、图文或包装小卡，讲清一个真实环节：制作、检查、打包或发出，而不是堆砌大而空的品质词。",
+        "applicable_scene": "用于产品详情页、短视频连载、直播讲解和包装内页，以真实过程建立信任感。",
+        "festival_context": "非节日驱动。",
+        "risk_note": "只能展示可被自身资料证明的真实环节；不得虚构检测、认证、产能、物流时效或品质功效。",
+        "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113155.html",),
+    },
+    {
+        "theme": "用一条短视频讲清楚下单后会发生什么",
+        "content_motif": "线上消费里，等待也属于体验的一部分。商家可把下单、准备、打包、发出和收到后的使用建议拍成一条简短内容，降低陌生消费者的顾虑。",
+        "applicable_scene": "用于商品详情页、短视频账号置顶内容、首次下单私信和售后关怀，让购买过程更有确定感。",
+        "festival_context": "非节日驱动。",
+        "risk_note": "不得宣称自身具备海外仓或具体履约时效；来源只可作为供应链灵感。",
+        "source_urls": ("https://www.tidesight.com/news/1371277.html",),
+    },
+)
 
 @dataclass
 class VerifiedSource:
@@ -355,6 +434,13 @@ def _validate_ideas(
             continue
         idea_text = " ".join((idea.theme, idea.content_motif, idea.applicable_scene))
         if not idea.content_motif or not idea.applicable_scene or re.search(r"餐饮|餐厅|门店|菜单|桌边|外卖|招商加盟|堂食", idea_text):
+            continue
+        if any(term in idea_text for term in _SPECIFIC_CATEGORY_TERMS):
+            continue
+        if not holiday_only and (
+            not _ACTION_THEME_PREFIX.search(idea.theme)
+            or any(term in idea.theme for term in _ABSTRACT_THEME_TERMS)
+        ):
             continue
         if holiday_only:
             if holiday_only_count >= 2:
@@ -760,8 +846,57 @@ async def weekly_tide_refresh_loop(stop_event: asyncio.Event) -> None:
             continue
 
 
+def _ensure_bootstrap_shared_report() -> None:
+    """Install a verified shared fallback only when no successful edition exists."""
+    with connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            """SELECT 1 FROM tide_editions
+               WHERE editorial_version = ? AND status IN ('succeeded', 'partial')
+               LIMIT 1""",
+            (TIDE_EDITORIAL_VERSION,),
+        ).fetchone()
+        if existing:
+            return
+        edition_id = new_id()
+        connection.execute(
+            """INSERT INTO tide_editions
+               (id, week_key, status, error_code, created_at, completed_at, editorial_version)
+               VALUES (?, ?, 'partial', NULL, ?, ?, ?)""",
+            (
+                edition_id, _BOOTSTRAP_SHARED_WEEK_KEY, _BOOTSTRAP_SHARED_CAPTURED_AT,
+                _BOOTSTRAP_SHARED_CAPTURED_AT, TIDE_EDITORIAL_VERSION,
+            ),
+        )
+        source_ids: dict[str, str] = {}
+        for source in _BOOTSTRAP_SHARED_SOURCES:
+            source_id = new_id()
+            source_ids[source["url"]] = source_id
+            connection.execute(
+                """INSERT INTO tide_report_sources
+                   (id, edition_id, channel, publisher, source_url, source_title, published_at, source_excerpt, captured_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    source_id, edition_id, source["channel"], source["publisher"], source["url"],
+                    source["title"], source["published_at"], source["excerpt"], _BOOTSTRAP_SHARED_CAPTURED_AT,
+                ),
+            )
+        for idea in _BOOTSTRAP_SHARED_IDEAS:
+            connection.execute(
+                """INSERT INTO tide_report_ideas
+                   (id, edition_id, theme, content_motif, applicable_scene, festival_context, risk_note, source_ids_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    new_id(), edition_id, idea["theme"], idea["content_motif"], idea["applicable_scene"],
+                    idea["festival_context"], idea["risk_note"],
+                    json_value([source_ids[url] for url in idea["source_urls"]]), _BOOTSTRAP_SHARED_CAPTURED_AT,
+                ),
+            )
+
+
 def latest_report_for_project(project_id: str, visitor_id: str | None = None) -> dict[str, Any]:
     """Prefer this visitor's current personal report, otherwise show shared."""
+    _ensure_bootstrap_shared_report()
     refresh_state = personal_refresh_state(visitor_id) if visitor_id else {
         "status": "idle", "phase": "idle", "can_refresh": False,
         "next_refresh_at": next_personal_refresh_at(), "error_code": None, "attempt_count": 0,
@@ -811,7 +946,11 @@ def latest_report_for_project(project_id: str, visitor_id: str | None = None) ->
             idea["favorite"] = preference.get("favorite", 0)
             idea["used_at"] = preference.get("used_at")
         return {
-            "edition": edition | {"scope": scope, "ideas": ideas},
+            "edition": edition | {
+                "scope": scope,
+                "is_fallback": scope == "shared" and edition["week_key"] == _BOOTSTRAP_SHARED_WEEK_KEY,
+                "ideas": ideas,
+            },
             "latest_attempt": latest_attempt,
             "refresh_state": refresh_state,
             "next_refresh_at": refresh_state["next_refresh_at"],
