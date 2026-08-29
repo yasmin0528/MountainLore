@@ -327,3 +327,4 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 /* 档案详情脱离工作区排版，始终以页面中央浮窗呈现。 */
 .archive-modal-backdrop{z-index:1000}
 .archive-folio-dialog{max-height:calc(100dvh - 56px);overflow:auto}
+.auth-modal-backdrop{z-index:1000}

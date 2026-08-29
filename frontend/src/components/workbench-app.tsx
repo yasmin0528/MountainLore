@@ -3,6 +3,7 @@
 
 import Image from "next/image";
 import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, ApiError, createRequestId, encodeFileNameForHeader } from "@/lib/api";
 import { ArchiveFolioDialog, BrandMaterials, DirectionDraftDialog, ProjectDirectory } from "@/components/archive-studio";
 import { BrandManualResult, type ManualVisualPreferences } from "@/components/brand-manual-result";
@@ -526,11 +527,14 @@ function AuthDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () =>
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setLocalError(null);
     try { await onSubmit(mode, email, password); } catch (caught) { setLocalError(errorText(caught)); }
   };
-  return <div className="modal-backdrop" role="presentation"><section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"><button type="button" className="modal-close" aria-label="关闭账号窗口" onClick={onClose}>×</button><p className="eyebrow">账号与档案</p><h2 id="account-dialog-title">{mode === "register" ? "保存你的田野记录" : "回到你的田野记录"}</h2><p>登录后可在其他设备继续查看和编辑已采风的品牌档案。</p><div className="auth-tabs" role="tablist" aria-label="账号操作"><button type="button" role="tab" aria-selected={mode === "register"} className={mode === "register" ? "is-active" : ""} onClick={() => setMode("register")}>注册</button><button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "is-active" : ""} onClick={() => setMode("login")}>登录</button></div><form onSubmit={submit}><label>邮箱<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>密码<input type="password" autoComplete={mode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required /><small>至少 8 个字符</small></label>{localError && <p className="form-error" role="alert">{localError}</p>}<footer><button type="button" className="secondary-button" onClick={onClose}>暂不登录</button><button className="primary-button" disabled={busy}>{busy ? "正在处理…" : mode === "register" ? "注册并保存" : "登录"}</button></footer></form></section></div>;
+  const dialog = <div className="modal-backdrop auth-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"><button type="button" className="modal-close" aria-label="关闭账号窗口" onClick={onClose}>×</button><p className="eyebrow">账号与档案</p><h2 id="account-dialog-title">{mode === "register" ? "保存你的田野记录" : "回到你的田野记录"}</h2><p>登录后可在其他设备继续查看和编辑已采风的品牌档案。</p><div className="auth-tabs" role="tablist" aria-label="账号操作"><button type="button" role="tab" aria-selected={mode === "register"} className={mode === "register" ? "is-active" : ""} onClick={() => setMode("register")}>注册</button><button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "is-active" : ""} onClick={() => setMode("login")}>登录</button></div><form onSubmit={submit}><label>邮箱<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>密码<input type="password" autoComplete={mode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required /><small>至少 8 个字符</small></label>{localError && <p className="form-error" role="alert">{localError}</p>}<footer><button type="button" className="secondary-button" onClick={onClose}>暂不登录</button><button className="primary-button" disabled={busy}>{busy ? "正在处理…" : mode === "register" ? "注册并保存" : "登录"}</button></footer></form></section></div>;
+  return mounted ? createPortal(dialog, document.body) : null;
 }
 
 function DeleteProjectDialog({ project, subject, description = "删除后，这个项目的采风记录、档案卡与品牌资产会被永久移除，无法恢复。", confirmLabel = "确认永久删除", keepLabel = "保留项目", busy, onClose, onConfirm }: { project: Project; subject?: string; description?: string; confirmLabel?: string; keepLabel?: string; busy: boolean; onClose: () => void; onConfirm: () => void }) {
