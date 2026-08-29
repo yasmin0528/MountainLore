@@ -57,8 +57,16 @@ def _weekly_sources() -> list[WeeklyTideSource]:
 
 
 def _weekly_ideas(sources: list[dict[str, str]]) -> list[WeeklyTideIdea]:
+    themes = [
+        "把产品故事拍成可分享的短视频",
+        "为周末出行做一套轻便尝鲜组合",
+        "用一次开箱互动拉近新用户距离",
+        "给第一次下单的人一份安心指引",
+        "设计一场朋友愿意参与的体验活动",
+        "让产品过程成为日常内容素材",
+    ]
     return [
-        WeeklyTideIdea(f"灵感 {index}", "内容母题", "通勤与朋友小聚", "中秋前的分享场景", "仅作创意角度", [source["url"]])
+        WeeklyTideIdea(themes[index - 1], "用通俗语言说明消费者变化与商家做法", "用于产品内容、社交媒体和首次体验触点", "中秋前的分享场景", "仅作创意角度", [source["url"]])
         for index, source in enumerate(sources, start=1)
     ]
 
@@ -98,7 +106,7 @@ def test_weekly_report_is_verified_shared_and_keeps_previous_success(tmp_path: P
     failed = refresh_weekly_tide_report(datetime(2026, 9, 7, 9, tzinfo=SHANGHAI))
     assert failed["status"] == "failed"
     report = latest_report_for_project("any-positioned-project")
-    assert report["edition"]["week_key"] == "2026-08-31-editorial-v4"
+    assert report["edition"]["week_key"] == f"2026-08-31-editorial-v{TIDE_EDITORIAL_VERSION}"
     assert report["edition"]["editorial_version"] == TIDE_EDITORIAL_VERSION
     assert len(report["edition"]["ideas"]) == 6
 
@@ -116,11 +124,11 @@ def test_tide_report_api_favorite_use_and_generation_snapshot(tmp_path: Path, mo
     with TestClient(app) as client:
         client.post("/api/visitors")
         sample = client.get("/api/tide-report/sample").json()["data"]
-        assert sample["edition"]["week_key"] == "2026-08-31-editorial-v4"
+        assert sample["edition"]["week_key"] == f"2026-08-31-editorial-v{TIDE_EDITORIAL_VERSION}"
         assert len(sample["edition"]["ideas"]) == 6
         project_id = _seed_positioned_project(client)
         report = client.get(f"/api/projects/{project_id}/tide-report").json()["data"]
-        assert report["edition"]["week_key"] == "2026-08-31-editorial-v4"
+        assert report["edition"]["week_key"] == f"2026-08-31-editorial-v{TIDE_EDITORIAL_VERSION}"
         idea_id = report["edition"]["ideas"][0]["id"]
         assert client.post(f"/api/projects/{project_id}/tide-report-ideas/{idea_id}/favorite").json()["data"]["favorite"] == 1
         used = client.post(f"/api/projects/{project_id}/tide-report-ideas/{idea_id}/use").json()["data"]
@@ -169,6 +177,39 @@ def test_holiday_only_report_can_publish_without_news_sources(tmp_path: Path, mo
     assert result == {"status": "partial", "week_key": "2026-08-31", "idea_count": 1}
     report = latest_report_for_project("any-positioned-project")
     assert report["edition"]["ideas"][0]["sources"] == []
+
+
+def test_weekly_ideas_require_actions_and_reject_specific_categories() -> None:
+    source_url = "https://www.foodaily.com/article/consumer-change"
+    valid = WeeklyTideIdea(
+        "把产品故事拍成可分享的短视频",
+        "消费者更愿意把有真实过程和参与感的内容分享给朋友。",
+        "用于短视频账号、商品详情页和首次体验触点。",
+        "非节日驱动。",
+        "仅作创意角度。",
+        [source_url],
+    )
+    abstract = WeeklyTideIdea(
+        "地方物产跨区域销售的轻量履约叙事",
+        "围绕供应链叙事组织内容。",
+        "用于跨区域销售。",
+        "非节日驱动。",
+        "仅作创意角度。",
+        [source_url],
+    )
+    category_specific = WeeklyTideIdea(
+        "把食用菌生产过程拍成短视频",
+        "消费者在意食用菌的制作过程。",
+        "用于食用菌产品内容。",
+        "非节日驱动。",
+        "仅作创意角度。",
+        [source_url],
+    )
+
+    assert _validate_ideas(
+        [abstract, category_specific, valid],
+        {source_url: "source-1"},
+    ) == [valid]
 
 
 def test_tide_provider_uses_its_own_models_and_credentials(monkeypatch) -> None:

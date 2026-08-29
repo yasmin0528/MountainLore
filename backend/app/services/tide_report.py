@@ -20,7 +20,7 @@ from app.fieldwork.store import connect, json_value, new_id, now, row_dict
 from app.services.providers import ProviderError, WeeklyTideIdea, WeeklyTideSource, provider
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-TIDE_EDITORIAL_VERSION = 4
+TIDE_EDITORIAL_VERSION = 5
 _ALLOWED_HOSTS = {
     "canyin88.com": ("industry", "红餐网"),
     "watcn.com": ("industry", "餐饮老板内参"),
@@ -41,8 +41,14 @@ _TRACKING_QUERY_KEYS = {"spm", "from", "source", "ref", "referrer", "campaign", 
 _TERMINAL_REPORT_STATUSES = {"succeeded", "partial"}
 _RUNNING_TIMEOUT = timedelta(minutes=10)
 _RETRY_DELAY = timedelta(seconds=60)
-_BOOTSTRAP_SHARED_WEEK_KEY = "cached-2026-08-29-editorial-v4"
+_BOOTSTRAP_SHARED_WEEK_KEY = "cached-2026-08-29-editorial-v5"
 _BOOTSTRAP_SHARED_CAPTURED_AT = "2026-08-29T10:49:05+00:00"
+_ACTION_THEME_PREFIX = re.compile(r"^(?:把|为|用|做|给|将|设计|推出|策划|拍|写|开|让|借|围绕)")
+_ABSTRACT_THEME_TERMS = ("叙事", "档案", "洞察", "主题灵感", "供应链", "履约")
+_SPECIFIC_CATEGORY_TERMS = (
+    "食用菌", "菌菇", "茶叶", "粮油", "坚果", "干果", "调味品", "咖啡", "奶酪",
+    "金针菇", "真姬菇", "酱油", "辣椒", "刺梨", "腊肉", "蜂蜜", "谷物", "果汁",
+)
 # This is the last successfully verified shared edition, kept intentionally
 # small so a fresh database never starts with a blank report when live search
 # is temporarily unavailable. It is replaced by the next successful shared run.
@@ -82,33 +88,33 @@ _BOOTSTRAP_SHARED_SOURCES = (
 )
 _BOOTSTRAP_SHARED_IDEAS = (
     {
-        "theme": "中秋山地物产礼盒的可溯源供应链叙事",
-        "content_motif": "把产地、加工批次、仓储和配送节点做成礼盒内的产地档案，以来源中的行业礼盒与供应链动态为创意角度。",
-        "applicable_scene": "山地茶叶、菌菇、粮油、发酵调味品等地方物产的中秋礼盒页、产品手册和产地溯源卡。",
+        "theme": "把中秋礼盒做成能分享的开箱仪式",
+        "content_motif": "新消费里的送礼不只看实用，也看能否被拍下、分享和留下记忆。商家可把开箱顺序、祝福卡和一项可参与的小互动做成完整体验。",
+        "applicable_scene": "用于节日礼盒、社交媒体开箱内容、私域预热与送礼页，让消费者愿意主动分享这次收到的体验。",
         "festival_context": "中秋：2026-09-25，适合礼赠、团圆分享、企业福利等表达。",
         "risk_note": "不得虚构礼盒已上市、销量、产地认证或检测数据；具体产地与工艺须有独立验链来源。",
         "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113154.html",),
     },
     {
-        "theme": "国庆山野出行的便携饮品与轻量补给灵感",
-        "content_motif": "从通勤、早餐、工作与居家等高频饮品场景，转译为山地农产品的小包装冲调饮、即饮茶饮或谷物饮表达。",
-        "applicable_scene": "国庆出行装、山野徒步随身包、产地旅行伴手礼、地方饮品新品概念页。",
+        "theme": "为国庆短途出行做一套轻便尝鲜组合",
+        "content_motif": "年轻消费者会把短途出行、户外和临时相聚当作尝试新品牌的场景。商家可设计轻量、易携带、适合多人分享的尝鲜组合，而非只卖单一规格。",
+        "applicable_scene": "用于国庆出行、露营聚会、返乡探亲和伴手礼内容，突出“带上就走、一起尝尝”的体验理由。",
         "festival_context": "国庆：2026-10-01，适合山野出行、返乡探亲、自驾携带等场景。",
         "risk_note": "不得把咖啡市场数据直接套用于地方饮品；不得宣称提神、补给或健康功效。",
         "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113156.html",),
     },
     {
-        "theme": "食用菌品牌的价格周期与稳供能力内容档案",
-        "content_motif": "围绕工厂化、高周转、供给集中和价格周期，转译为食用菌产地对产能、冷链周转与稳定供货的科普表达。",
-        "applicable_scene": "食用菌产品册、产地供应链白皮书、B端采购说明与农事科普短文。",
+        "theme": "把产品背后的过程拍成让人安心的透明日常",
+        "content_motif": "消费者越来越在意“这件产品怎么来到我手上”。商家可用短视频、图文或包装小卡，讲清一个真实环节：制作、检查、打包或发出，而不是堆砌大而空的品质词。",
+        "applicable_scene": "用于产品详情页、短视频连载、直播讲解和包装内页，以真实过程建立信任感。",
         "festival_context": "非节日驱动。",
-        "risk_note": "只能讨论来源出现的行业现象；不得虚构某产区价格走势、企业盈利或产品功效。",
+        "risk_note": "只能展示可被自身资料证明的真实环节；不得虚构检测、认证、产能、物流时效或品质功效。",
         "source_urls": ("https://www.canyin88.com/zixun/2026/08/29/113155.html",),
     },
     {
-        "theme": "地方物产跨区域销售的轻量履约叙事",
-        "content_motif": "参考多市场经营工具、仓配网络和库存调拨的公开案例，转译为小批量试销、包装标准化与库存可视化的供应链内容。",
-        "applicable_scene": "地方物产跨区域销售说明、跨境电商产品资料、仓配流程介绍和渠道端履约能力展示。",
+        "theme": "用一条短视频讲清楚下单后会发生什么",
+        "content_motif": "线上消费里，等待也属于体验的一部分。商家可把下单、准备、打包、发出和收到后的使用建议拍成一条简短内容，降低陌生消费者的顾虑。",
+        "applicable_scene": "用于商品详情页、短视频账号置顶内容、首次下单私信和售后关怀，让购买过程更有确定感。",
         "festival_context": "非节日驱动。",
         "risk_note": "不得宣称自身具备海外仓或具体履约时效；来源只可作为供应链灵感。",
         "source_urls": ("https://www.tidesight.com/news/1371277.html",),
@@ -428,6 +434,13 @@ def _validate_ideas(
             continue
         idea_text = " ".join((idea.theme, idea.content_motif, idea.applicable_scene))
         if not idea.content_motif or not idea.applicable_scene or re.search(r"餐饮|餐厅|门店|菜单|桌边|外卖|招商加盟|堂食", idea_text):
+            continue
+        if any(term in idea_text for term in _SPECIFIC_CATEGORY_TERMS):
+            continue
+        if not holiday_only and (
+            not _ACTION_THEME_PREFIX.search(idea.theme)
+            or any(term in idea.theme for term in _ABSTRACT_THEME_TERMS)
+        ):
             continue
         if holiday_only:
             if holiday_only_count >= 2:
