@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     tavily_search_depth: str = "basic"
     tavily_max_results_per_query: int = 3
     tavily_country: str = "china"
-    tide_search_lookback_days: int = 30
+    tide_search_lookback_days: int = 7
     openai_next_image_base_url: str = "https://draw.openai-next.com/v1"
     openai_next_image_api_key: str = ""
     openai_next_image_model: str = "gpt-image-2"

@@ -147,7 +147,16 @@ def initialize_database() -> None:
             );
             CREATE TABLE IF NOT EXISTS tide_editions (
               id TEXT PRIMARY KEY, week_key TEXT UNIQUE NOT NULL, status TEXT NOT NULL,
-              error_code TEXT, created_at TEXT NOT NULL, completed_at TEXT
+              error_code TEXT, created_at TEXT NOT NULL, completed_at TEXT,
+              editorial_version INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS tide_personal_editions (
+              id TEXT PRIMARY KEY, visitor_id TEXT NOT NULL, week_key TEXT NOT NULL,
+              status TEXT NOT NULL, phase TEXT NOT NULL, error_code TEXT,
+              attempt_count INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
+              editorial_version INTEGER NOT NULL DEFAULT 1,
+              UNIQUE(visitor_id, week_key, editorial_version)
             );
             CREATE TABLE IF NOT EXISTS tide_report_sources (
               id TEXT PRIMARY KEY, edition_id TEXT NOT NULL, channel TEXT NOT NULL,
@@ -192,6 +201,7 @@ def initialize_database() -> None:
         _ensure_column(connection, "archive_cards", "updated_at", "TEXT")
         _ensure_column(connection, "archive_cards", "content_version", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(connection, "archive_cards", "source_summary", "TEXT")
+        _ensure_column(connection, "tide_editions", "editorial_version", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(connection, "tide_report_sources", "source_excerpt", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "media_assets", "kind", "TEXT NOT NULL DEFAULT 'upload'")
         _ensure_column(connection, "media_assets", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
@@ -244,6 +254,7 @@ def _retire_incompatible_tables(connection: sqlite3.Connection) -> None:
         "generation_jobs": {"id", "project_id", "template_type", "status", "input_snapshot_json", "result_json", "created_at", "updated_at"},
         "generation_previews": {"id", "project_id", "template_type", "inspiration_text", "input_snapshot_json", "result_json", "status", "created_at", "updated_at"},
         "tide_editions": {"id", "week_key", "status", "created_at"},
+        "tide_personal_editions": {"id", "visitor_id", "week_key", "status", "phase", "attempt_count", "created_at", "updated_at", "editorial_version"},
         "tide_report_sources": {"id", "edition_id", "channel", "publisher", "source_url", "source_title", "captured_at"},
         "tide_report_ideas": {"id", "edition_id", "theme", "content_motif", "applicable_scene", "festival_context", "risk_note", "source_ids_json", "created_at"},
         "project_tide_idea_preferences": {"project_id", "idea_id", "favorite", "updated_at"},

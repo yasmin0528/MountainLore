@@ -6,7 +6,7 @@ from binascii import Error as Base64Error
 from pathlib import Path
 from typing import Any, Annotated
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -14,7 +14,12 @@ from app.api.routes.fieldwork import current_visitor, envelope, fail, project_fo
 from app.core.config import settings
 from app.fieldwork.store import connect, decode_record, json_value, new_id, now, row_dict
 from app.services.providers import ProviderError, provider
-from app.services.tide_report import latest_report_for_project, shared_idea_for_project
+from app.services.tide_report import (
+    latest_report_for_project,
+    refresh_personal_tide_report,
+    reserve_personal_tide_refresh,
+    shared_idea_for_project,
+)
 from app.services.workflow import create_manual_skeleton, create_task, execute_task, hash_share_token, project_snapshot, submit_task
 
 router = APIRouter()
@@ -62,6 +67,28 @@ class GenerationPreviewCreate(BaseModel):
     template_type: str
     inspiration_text: str = Field(min_length=1, max_length=1200)
     inspiration_card_id: str | None = None
+    material_ids: list[str] = Field(default_factory=list, max_length=4)
+
+
+MATERIAL_PROMPT_SEGMENTS: dict[str, str] = {
+    "sticker": "品牌贴纸：以多规格异形贴纸组成一套可单独使用的贴纸系列，突出轮廓、留白和成组关系。",
+    "gift-box": "礼盒包装：展示开合式礼盒的正面、材质和局部结构，作为赠礼场景中的主物件。",
+    "can": "罐装包装：展示罐体比例、环绕标签位置和陈列节奏，保留可用于后续落版的干净画面。",
+    "expo-banner": "展会易拉宝：展示竖向现场立牌的整体版式、远观层级与产品陈列关系。",
+}
+
+
+def normalized_material_ids(template_type: str, material_ids: list[str]) -> list[str]:
+    """Validate client selections before any model or image provider is invoked."""
+    selections = list(dict.fromkeys(material_ids))
+    unknown = [material_id for material_id in selections if material_id not in MATERIAL_PROMPT_SEGMENTS]
+    if unknown:
+        fail(422, "包含不支持的实体物料类型", "invalid_material_type")
+    if template_type == "peripheral" and not selections:
+        fail(422, "实体物料设计至少选择一种物料", "material_required")
+    if template_type == "xiaohongshu" and selections:
+        fail(422, "线上图文生成不接受实体物料选择", "materials_not_supported")
+    return selections
 
 
 def records(connection: Any, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
@@ -474,18 +501,31 @@ def get_tide_report(project_id: str, visitor: Annotated[dict[str, Any], Depends(
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         require_current_direction(connection, project_id)
-    return envelope(latest_report_for_project(project_id))
+    return envelope(latest_report_for_project(project_id, visitor["id"]))
 
 
 @router.get("/tide-report/sample")
-def get_tide_report_sample() -> dict[str, Any]:
-    """Expose the shared, verified weekly report for the read-only demo page.
+def get_tide_report_sample(visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
+    """The demo uses the same anonymous visitor refresh contract as projects."""
+    return envelope(latest_report_for_project("demo-preview", visitor["id"]))
 
-    A report is generated independently from projects and contains only
-    allow-listed public sources. Project-specific favorites and use history are
-    intentionally excluded from this preview.
-    """
-    return envelope(latest_report_for_project("demo-preview"))
+
+@router.post("/tide-report/refresh", status_code=202)
+def refresh_tide_report(
+    background_tasks: BackgroundTasks,
+    visitor: Annotated[dict[str, Any], Depends(current_visitor)],
+) -> dict[str, Any]:
+    if not provider.live:
+        fail(409, "观潮联网搜集尚未配置，请检查检索与提炼服务", "tide_not_configured")
+    state = reserve_personal_tide_refresh(visitor["id"])
+    if state.get("accepted"):
+        background_tasks.add_task(
+            refresh_personal_tide_report,
+            visitor["id"],
+            state["edition_id"],
+            attempt_count=state["attempt_count"],
+        )
+    return envelope({"refresh_state": {key: value for key, value in state.items() if key not in {"accepted", "edition_id"}}})
 
 
 @router.post("/projects/{project_id}/tide-report-ideas/{idea_id}/favorite")
@@ -493,7 +533,7 @@ def favorite_tide_report_idea(project_id: str, idea_id: str, visitor: Annotated[
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         require_current_direction(connection, project_id)
-        if not shared_idea_for_project(connection, idea_id):
+        if not shared_idea_for_project(connection, idea_id, visitor["id"]):
             fail(404, "找不到这条本周灵感", "tide_idea_not_found")
         existing = row_dict(connection.execute(
             "SELECT favorite FROM project_tide_idea_preferences WHERE project_id = ? AND idea_id = ?", (project_id, idea_id)
@@ -513,7 +553,7 @@ def use_tide_report_idea(project_id: str, idea_id: str, visitor: Annotated[dict[
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         require_current_direction(connection, project_id)
-        idea = shared_idea_for_project(connection, idea_id)
+        idea = shared_idea_for_project(connection, idea_id, visitor["id"])
         if not idea:
             fail(404, "找不到这条本周灵感", "tide_idea_not_found")
         connection.execute(
@@ -592,7 +632,7 @@ def generation_context(connection: Any, project_id: str, inspiration_card_id: st
         fail(422, "请先选择一条品牌路线", "direction_required")
     context["direction"] = json.loads(current["content_json"])
     if inspiration_card_id:
-        inspiration = shared_idea_for_project(connection, inspiration_card_id)
+        inspiration = shared_idea_for_project(connection, inspiration_card_id, context["project"].get("visitor_id"))
         if inspiration:
             sources = inspiration.get("sources", [])
             inspiration["source_title"] = "、".join(str(source["source_title"]) for source in sources[:2]) or inspiration["theme"]
@@ -610,14 +650,49 @@ def generation_context(connection: Any, project_id: str, inspiration_card_id: st
     return context
 
 
-def model_launch_copy(context: dict[str, Any], template_type: str, inspiration_text: str) -> dict[str, Any]:
+def launch_generation_input(context: dict[str, Any], template_type: str, inspiration_text: str, material_ids: list[str]) -> dict[str, Any]:
+    """Build the hidden, deterministic production brief used by both models."""
+    project = context["project"]
+    direction = context["direction"]
+    if template_type == "peripheral":
+        material_prompt = "制作类型：实体物料设计。将以下物料作为同一套品牌视觉系统来呈现：" + " ".join(
+            MATERIAL_PROMPT_SEGMENTS[material_id] for material_id in material_ids
+        ) + " 画面应体现真实可制作的样机、材质和结构；不生成可读文字。"
+    else:
+        material_prompt = (
+            "制作类型：线上图文生成。为移动端社媒图文制作竖版 3:4 首图/封面构图，"
+            "突出单一主题、清晰视觉焦点和可继续排版的留白；不生成可读文字。"
+        )
+    image_prompt = (
+        f"中国贵州山地农产品品牌概念图。产品：{project['core_product']}；产地：{project['origin']}；"
+        f"品牌路线：{direction.get('brand_one_liner', '')}。"
+        f"用户图像需求（只作为创意方向，不得改写品牌事实）：{inspiration_text.strip()}。"
+        f"{material_prompt} 暖纸、靛蓝布面、苔藓绿、明黄标记、地方档案质感、竖版 3:4。"
+        "不出现疗效、夸张承诺或虚构来源。"
+    )
+    return {
+        "template_type": template_type,
+        "user_prompt": inspiration_text.strip(),
+        "material_ids": material_ids,
+        "material_prompt": material_prompt,
+        "image_prompt": image_prompt,
+    }
+
+
+def model_launch_copy(context: dict[str, Any], generation_input: dict[str, Any]) -> dict[str, Any]:
+    template_type = str(generation_input["template_type"])
+    inspiration_text = str(generation_input["user_prompt"])
     baseline = launch_brief(context, template_type, inspiration_text)
     instruction = (
         "根据确认档案、当前路线和用户灵感，生成一份出山概念稿的文字内容。用户灵感只可作为创意方向，不得写成品牌事实。"
         "只输出 JSON，必须有 brief 字段；小红书图文额外输出 titles（3条）、body、hashtags；"
         "周边设计稿额外输出 concept_title、materials。不得出现疗效、绝对化承诺或虚构来源。"
     )
-    generated = provider.chat_json(model=settings.openai_next_text_model, instruction=instruction, context={**context, "user_inspiration": inspiration_text, "template_type": template_type})
+    generated = provider.chat_json(
+        model=settings.openai_next_text_model,
+        instruction=instruction,
+        context={**context, "user_inspiration": inspiration_text, "launch_generation": generation_input},
+    )
     if not isinstance(generated.get("brief"), str) or not generated["brief"].strip():
         raise ProviderError("invalid_model_json", "文案模型没有返回可用的概念 Brief")
     result = {**baseline, **generated, "warning": "AI 概念稿，不可直接印刷"}
@@ -653,6 +728,7 @@ def persist_preview_image(
 def create_generation_preview(project_id: str, payload: GenerationPreviewCreate, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
     if payload.template_type not in {"peripheral", "xiaohongshu"}:
         fail(422, "仅支持周边概念稿或小红书图文", "invalid_template")
+    material_ids = normalized_material_ids(payload.template_type, payload.material_ids)
     project_for_visitor(project_id, visitor)
     if not provider.live:
         fail(409, "请先在后端配置 Key，并将 AI_RUNTIME_MODE 设为 live 后再生成预览", "generation_not_configured")
@@ -661,9 +737,11 @@ def create_generation_preview(project_id: str, payload: GenerationPreviewCreate,
         if context["project"].get("launch_used", 0) >= 2:
             fail(429, "出山额度已用完", "launch_quota_exhausted")
         preview_id = new_id()
+        generation_input = launch_generation_input(context, payload.template_type, payload.inspiration_text, material_ids)
+        context["launch_generation"] = generation_input
         try:
-            result = model_launch_copy(context, payload.template_type, payload.inspiration_text)
-            prompt = f"中国贵州山地农产品品牌概念图。产品：{context['project']['core_product']}；产地：{context['project']['origin']}；品牌路线：{context['direction'].get('brand_one_liner', '')}；用户灵感：{payload.inspiration_text}。暖纸、靛蓝布面、苔藓绿、明黄标记、地方档案质感、竖版 3:4。不出现疗效或夸张承诺。"
+            result = model_launch_copy(context, generation_input)
+            prompt = generation_input["image_prompt"]
             image = provider.generate_image(prompt)
             result["image"] = persist_preview_image(connection, project_id, preview_id, image, prompt)
             status, error_code = "succeeded", None

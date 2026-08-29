@@ -169,6 +169,68 @@ def test_generation_preview_persists_base64_image_as_authenticated_media(tmp_pat
     assert image.content == b"image-bytes"
 
 
+def test_generation_preview_uses_server_material_prompt_and_keeps_it_in_snapshot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "prompt-preview.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    image_prompts: list[str] = []
+    text_contexts: list[dict] = []
+
+    def fake_chat_json(**kwargs):
+        text_contexts.append(kwargs["context"])
+        if kwargs["context"]["launch_generation"]["template_type"] == "xiaohongshu":
+            return {"brief": "线上图文概念", "titles": ["标题一", "标题二", "标题三"], "body": "正文", "hashtags": ["#贵州风物"]}
+        return {"brief": "实体物料概念", "concept_title": "礼赠系统", "materials": ["纸材"]}
+
+    def fake_generate_image(prompt: str, reference_images=None):
+        image_prompts.append(prompt)
+        return {"kind": "url", "value": "https://example.com/preview.png"}
+
+    with TestClient(app) as client:
+        project_id, _ = _seed_confirmed_card(client)
+        route = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"][0]
+        client.post(f"/api/directions/{route['id']}/select")
+        monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+        monkeypatch.setattr(provider, "chat_json", fake_chat_json)
+        monkeypatch.setattr(provider, "generate_image", fake_generate_image)
+
+        peripheral = client.post(
+            f"/api/projects/{project_id}/generation-previews",
+            json={"template_type": "peripheral", "inspiration_text": "中秋送给同事", "material_ids": ["sticker", "gift-box"]},
+        ).json()["data"]
+        assert "中秋送给同事" in image_prompts[-1]
+        assert "品牌贴纸" in image_prompts[-1]
+        assert "礼盒包装" in image_prompts[-1]
+        assert text_contexts[-1]["launch_generation"]["material_ids"] == ["sticker", "gift-box"]
+        saved = client.post(f"/api/generation-previews/{peripheral['id']}/save").json()["data"]
+        snapshot = saved["input_snapshot"]["launch_generation"]
+        assert snapshot["user_prompt"] == "中秋送给同事"
+        assert snapshot["material_ids"] == ["sticker", "gift-box"]
+        assert snapshot["image_prompt"] == image_prompts[0]
+
+        online = client.post(
+            f"/api/projects/{project_id}/generation-previews",
+            json={"template_type": "xiaohongshu", "inspiration_text": "午后冰镇的清酸", "material_ids": []},
+        ).json()["data"]
+        assert online["template_type"] == "xiaohongshu"
+        assert "线上图文生成" in image_prompts[-1]
+        assert "品牌贴纸" not in image_prompts[-1]
+
+        calls_before_rejections = (len(image_prompts), len(text_contexts))
+        missing_material = client.post(
+            f"/api/projects/{project_id}/generation-previews",
+            json={"template_type": "peripheral", "inspiration_text": "测试", "material_ids": []},
+        )
+        unknown_material = client.post(
+            f"/api/projects/{project_id}/generation-previews",
+            json={"template_type": "peripheral", "inspiration_text": "测试", "material_ids": ["unknown"]},
+        )
+        assert missing_material.status_code == 422
+        assert missing_material.json()["error"]["code"] == "material_required"
+        assert unknown_material.status_code == 422
+        assert unknown_material.json()["error"]["code"] == "invalid_material_type"
+        assert calls_before_rejections == (len(image_prompts), len(text_contexts))
+
 def test_generation_requires_active_archives_and_keeps_project_context_isolated(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "generation-scope.db"))
     monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
