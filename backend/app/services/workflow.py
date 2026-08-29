@@ -310,23 +310,39 @@ def _validate_routes(raw: Any, snapshot: dict[str, Any]) -> list[dict[str, Any]]
 def _generate_routes(task: dict[str, Any]) -> dict[str, Any]:
     snapshot = json.loads(task["input_snapshot_json"])
     _task_update(task["id"], progress=25)
+    fallback_reason: str | None = None
     if provider.live:
-        result = provider.chat_json(
-            model=settings.openai_next_text_model,
-            instruction=(
-                "基于冻结的项目、可公开事实与visual_preferences，生成恰好三版、受众/场景/叙事与视觉都明显不同的品牌初步方案。只输出 JSON 对象 {routes:[...]}。"
-                "每版必须含 title,candidate_brand_name,brand_one_liner,slogan,target_audience,target_scenarios,story_spine,"
-                "emotion_value,altruistic_value,selling_points(恰好3项，每项含category、explanation、text和claimIds；category只能是产品创新或创新活动策划),evidenceGaps,"
-                "visual_keywords,color_palette(恰好4个HEX色值),color_rationale,logo_design,positive_prompt,negative_prompt,content_tone,forbidden_expressions。"
-                "brand_one_liner 必须是一句完整介绍，同时体现品牌核心价值观和两项关键亮点；slogan 必须朗朗上口、易传播且有号召力，且不得与 brand_one_liner 相同或改写成同一句。"
-                "三版 color_palette 必须显著不同，并结合特色产品、原料、产地线索或已上传 Logo 提炼；color_rationale 要说明对应关系，不能沿用通用默认色板。"
-                "logo_design 必须是一段具体的无文字 Logo 设计说明，写清核心符号、构图、色彩或质感、小尺寸使用原则和明确避免项；三版的 Logo 方案必须显著不同。"
-                "claimIds只能使用输入 claims 的 id；无依据的表达不得伪装成事实，必须留空claimIds并写入evidenceGaps。"
-            ),
-            context=snapshot,
-        )
-        routes = _validate_routes(result.get("routes"), snapshot)
-        mode = "live"
+        try:
+            result = provider.chat_json(
+                model=settings.openai_next_text_model,
+                instruction=(
+                    "基于冻结的项目、可公开事实与visual_preferences，生成恰好三版、受众/场景/叙事与视觉都明显不同的品牌初步方案。只输出 JSON 对象 {routes:[...]}。"
+                    "每版必须含 title,candidate_brand_name,brand_one_liner,slogan,target_audience,target_scenarios,story_spine,"
+                    "emotion_value,altruistic_value,selling_points(恰好3项，每项含category、explanation、text和claimIds；category只能是产品创新或创新活动策划),evidenceGaps,"
+                    "visual_keywords,color_palette(恰好4个HEX色值),color_rationale,logo_design,positive_prompt,negative_prompt,content_tone,forbidden_expressions。"
+                    "brand_one_liner 必须是一句完整介绍，同时体现品牌核心价值观和两项关键亮点；slogan 必须朗朗上口、易传播且有号召力，且不得与 brand_one_liner 相同或改写成同一句。"
+                    "三版 color_palette 必须显著不同，并结合特色产品、原料、产地线索或已上传 Logo 提炼；color_rationale 要说明对应关系，不能沿用通用默认色板。"
+                    "logo_design 必须是一段具体的无文字 Logo 设计说明，写清核心符号、构图、色彩或质感、小尺寸使用原则和明确避免项；三版的 Logo 方案必须显著不同。"
+                    "claimIds只能使用输入 claims 的 id；无依据的表达不得伪装成事实，必须留空claimIds并写入evidenceGaps。"
+                ),
+                context=snapshot,
+                timeout_seconds=settings.route_generation_timeout_seconds,
+            )
+            routes = _validate_routes(result.get("routes"), snapshot)
+            mode = "live"
+        except ProviderError as exc:
+            # 定调不能因外部模型、配额或格式波动而中断。冻结事实仍足以
+            # 生成三条可编辑、可选择的基础路线；把外部错误留在任务结果中，
+            # 而不是把用户送进失败页面。
+            routes = _validate_routes(_fallback_routes(snapshot), snapshot)
+            mode = "fallback"
+            fallback_reason = exc.code
+        except Exception:
+            # 网关偶发返回的非预期对象同样不能阻塞定调；不暴露底层异常，
+            # 只保留一个稳定的诊断码供后端排查。
+            routes = _validate_routes(_fallback_routes(snapshot), snapshot)
+            mode = "fallback"
+            fallback_reason = "route_model_response_unavailable"
     else:
         routes = _validate_routes(_fallback_routes(snapshot), snapshot)
         mode = "demo"
@@ -352,7 +368,7 @@ def _generate_routes(task: dict[str, Any]) -> dict[str, Any]:
             "UPDATE projects SET current_stage = 'chronicle', status = 'directions_ready', updated_at = ? WHERE id = ?",
             (now(), task["project_id"]),
         )
-    return {"routes": created, "version": version, "mode": mode}
+    return {"routes": created, "version": version, "mode": mode, "fallback_reason": fallback_reason}
 
 
 def _fallback_manual(snapshot: dict[str, Any]) -> dict[str, Any]:

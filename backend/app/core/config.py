@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     openai_next_image_model: str = "gpt-image-2"
     openai_next_image_size: str = "896x1184"
     provider_timeout_seconds: int = 120
+    route_generation_timeout_seconds: int = 20
     tide_refresh_interval_seconds: int = 60
     tide_source_verify_timeout_seconds: int = 12
     tide_source_max_results: int = 30

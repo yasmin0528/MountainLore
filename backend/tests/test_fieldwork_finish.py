@@ -83,3 +83,25 @@ def test_terminal_state_is_detected_by_answer_count_even_without_finish_prompt(t
         project_response = client.get(f"/api/projects/{session['project_id']}")
         project_response.raise_for_status()
         assert project_response.json()["data"]["session"]["ready_to_finish"] is True
+
+
+def test_fourth_answer_is_allowed_before_finish(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "fourth-round.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    with TestClient(app) as client:
+        _, session = create_project_and_session(client)
+        for _ in range(4):
+            response = client.post(
+                f"/api/sessions/{session['id']}/messages",
+                json={"content": "这是第 4 轮的真实细节。", "skipped": False, "media_asset_ids": []},
+            )
+            if _ < 3:
+                response.raise_for_status()
+            else:
+                response.raise_for_status()
+
+        updated = client.get(f"/api/projects/{session['project_id']}").json()["data"]["session"]
+        assert updated["ready_to_finish"] is True
+        assert updated["messages"][-1]["role"] == "assistant"
+        assert "结束本次采风" in updated["messages"][-1]["content"]

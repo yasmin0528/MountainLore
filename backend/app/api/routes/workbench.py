@@ -252,6 +252,18 @@ def patch_archive_card(card_id: str, payload: CardPatch, visitor: Annotated[dict
     return envelope(result)
 
 
+@router.delete("/archive-cards/{card_id}")
+def delete_archive_card(card_id: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
+    with connect() as connection:
+        card = row_dict(connection.execute("SELECT * FROM archive_cards WHERE id = ?", (card_id,)).fetchone())
+        if not card:
+            fail(404, "找不到档案卡", "archive_not_found")
+        project_for_visitor(card["project_id"], visitor)
+        connection.execute("DELETE FROM archive_card_claims WHERE archive_card_id = ?", (card_id,))
+        connection.execute("DELETE FROM archive_cards WHERE id = ?", (card_id,))
+    return envelope({"id": card_id, "status": "deleted"})
+
+
 @router.post("/archive-cards/{card_id}/discard")
 def discard_archive_card(card_id: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
     with connect() as connection:

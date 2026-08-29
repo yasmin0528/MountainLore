@@ -60,10 +60,8 @@ async function extractPalette(file: File): Promise<string[]> {
   return [...selected.map((color) => `#${toHex(color[0])}${toHex(color[1])}${toHex(color[2])}`.toUpperCase()), ...DEFAULT_PALETTE].slice(0, 4);
 }
 
-function RouteProgress({ task, onRetry }: { task: WorkflowTask; onRetry: (id: string) => void }) {
-  const failed = task.status === "failed";
-  const failureMessage = typeof task.result?.message === "string" ? task.result.message : task.error_code === "provider_timeout" ? "模型请求超时，可重试。" : "生成未完成，可重试。";
-  return <section className={`manual-progress-stage${failed ? " is-failed" : ""}`} role="status"><span className="manual-progress-seal">{failed ? "停" : "定"}</span><p className="eyebrow">品牌路线 · {failed ? "生成失败" : "正在整理"}</p><h1>{failed ? "三条路线未生成完成" : "正在生成三条差异路线"}</h1><p>{failed ? failureMessage : "档案事实与视觉偏好会一起冻结保存。生成完成后，再由你选择其中一条路线。"}</p>{!failed && <progress value={task.progress ?? 8} max={100} />}{failed && <button className="secondary-button" onClick={() => onRetry(task.id)}>重试生成路线</button>}</section>;
+function RouteProgress({ task }: { task: WorkflowTask }) {
+  return <section className="manual-progress-stage" role="status"><span className="manual-progress-seal">定</span><p className="eyebrow">品牌路线 · 正在整理</p><h1>正在生成三条差异路线</h1><p>档案事实与视觉偏好会一起冻结保存。生成完成后，再由你选择其中一条路线。</p><progress value={task.progress ?? 8} max={100} /></section>;
 }
 
 function ManualUnavailable({ current, busy, onRefresh, onSelect, onFailure }: { current: Direction; busy: boolean; onRefresh: () => Promise<void>; onSelect: (id: string) => Promise<boolean>; onFailure: (message: string) => void }) {
@@ -107,7 +105,7 @@ export function BrandManualResult({ workspace, logoTask, patternTask, exportTask
   const logo = [...(workspace.manual_assets ?? [])].reverse().find((asset) => asset.kind === "logo_mark"); const pattern = [...(workspace.manual_assets ?? [])].reverse().find((asset) => asset.kind === "extension_pattern"); const palette = list(draft.color_palette).slice(0, 4); const points = pointList(draft.selling_points);
   const slides = useMemo(() => ["首页", "Logo", "字体 / 颜色", "品牌一句话", "口号", "目标人群 / 场景", "故事主线", "卖点 01", "卖点 02", "卖点 03"], []);
 
-  if (!workspace.manual && !current && routeTask && ["queued", "running", "failed"].includes(routeTask.status)) return <RouteProgress task={routeTask} onRetry={onRetry} />;
+  if (!workspace.manual && !current && routeTask && ["queued", "running"].includes(routeTask.status)) return <RouteProgress task={routeTask} />;
   if (!workspace.manual && !current && routes.length >= 3) return <RouteCompare routes={routes.slice(0, 3)} busy={busy} onSelect={onSelect} onRegenerate={() => void onGenerate(((routeContent(routes[0]).visual_preferences ?? { logo_mode: "ai", font_family: FONT_OPTIONS[0].value, font_label: FONT_OPTIONS[0].label, palette: DEFAULT_PALETTE }) as ManualVisualPreferences))} />;
   if (!workspace.manual && !current) return <Setup workspace={workspace} busy={busy} onGenerate={onGenerate} onFailure={onFailure} />;
   if (!workspace.manual && current) return <ManualUnavailable current={current} busy={busy} onRefresh={onRefresh} onSelect={onSelect} onFailure={onFailure} />;

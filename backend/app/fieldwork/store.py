@@ -50,7 +50,8 @@ def initialize_database() -> None:
             );
             CREATE TABLE IF NOT EXISTS messages (
               id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
-              content TEXT NOT NULL, sequence INTEGER NOT NULL, created_at TEXT NOT NULL
+              content TEXT NOT NULL, sequence INTEGER NOT NULL, round_no INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS media_assets (
               id TEXT PRIMARY KEY, project_id TEXT NOT NULL, storage_key TEXT NOT NULL,
@@ -210,6 +211,12 @@ def initialize_database() -> None:
         _ensure_column(connection, "tasks", "attempt", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(connection, "tasks", "retriable", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(connection, "tasks", "parent_task_id", "TEXT")
+        # Round number lets a single per-project session carry several
+        # fieldwork rounds (each with its own answer budget) while keeping the
+        # ``sessions.project_id`` uniqueness contract intact.  Never add this to
+        # ``_retire_incompatible_tables`` required columns: existing databases
+        # must be migrated in place (ALTER adds the column), not retired.
+        _ensure_column(connection, "messages", "round_no", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(connection, "brand_manuals", "current_version_id", "TEXT")
         _ensure_column(connection, "brand_manuals", "generated_snapshot_json", "TEXT NOT NULL DEFAULT '{}'")
         _migrate_legacy_archive_claims(connection)

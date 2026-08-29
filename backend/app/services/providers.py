@@ -173,7 +173,7 @@ class CreditsProvider:
 
     def chat_json(
         self, *, model: str, instruction: str, context: dict[str, Any],
-        image_paths: list[str] | None = None,
+        image_paths: list[str] | None = None, timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         return self._chat_json(
             model=model,
@@ -183,6 +183,7 @@ class CreditsProvider:
             api_key=settings.openai_next_api_key,
             missing_key_message="请先配置 OPENAI_NEXT_API_KEY",
             image_paths=image_paths,
+            timeout=httpx.Timeout(timeout_seconds) if timeout_seconds else None,
             json_mode=settings.openai_next_json_mode,
         )
 

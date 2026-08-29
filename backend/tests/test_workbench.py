@@ -113,6 +113,32 @@ def test_logo_failure_does_not_remove_the_selected_route_manual(tmp_path: Path, 
         assert workspace["directions"][0]["state"] == "current"
 
 
+def test_route_timeout_falls_back_to_three_selectable_directions(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "route-timeout.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    with TestClient(app) as client:
+        project_id, _ = _seed_confirmed_card(client)
+        monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+        monkeypatch.setattr(workbench_routes, "submit_task", lambda _task_id: None)
+
+        def timeout(*_args: object, **_kwargs: object) -> dict[str, object]:
+            raise ProviderError("provider_timeout", "模型请求超时，可重试")
+
+        monkeypatch.setattr(provider, "chat_json", timeout)
+        created = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["task"]
+        completed = workflow.execute_task(created["id"])
+        workspace = client.get(f"/api/projects/{project_id}/workspace").json()["data"]
+
+        assert completed["status"] == "succeeded"
+        assert completed["result"]["mode"] == "fallback"
+        assert completed["result"]["fallback_reason"] == "provider_timeout"
+        assert len(completed["result"]["routes"]) == 3
+        assert len([route for route in workspace["directions"] if route["state"] != "superseded"]) == 3
+        selected = client.post(f"/api/directions/{workspace['directions'][0]['id']}/select").json()["data"]
+        assert selected["manual"]["manual_version_id"]
+
+
 def test_generation_preview_is_not_an_archive_record_until_saved(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "preview.db"))
     monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))

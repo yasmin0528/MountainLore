@@ -142,7 +142,7 @@ def register(
     with connect() as connection:
         existing = connection.execute("SELECT id FROM users WHERE email = ?", (payload.email,)).fetchone()
         if existing:
-            fail(409, "该邮箱已注册，请直接登录", "email_registered", "email")
+            fail(409, "璇ラ偖绠卞凡娉ㄥ唽锛岃鐩存帴鐧诲綍", "email_registered", "email")
         user_id = new_id()
         created_at = now()
         connection.execute("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)", (user_id, payload.email, password_hash, created_at))
@@ -163,7 +163,7 @@ def login(
     with connect() as connection:
         user = row_dict(connection.execute("SELECT * FROM users WHERE email = ?", (payload.email,)).fetchone())
         if not user or not password_matches(payload.password, user["password_hash"]):
-            fail(401, "邮箱或密码不正确", "invalid_credentials")
+            fail(401, "閭鎴栧瘑鐮佷笉姝ｇ‘", "invalid_credentials")
         visitor_id = None
         if visitor_token:
             visitor = connection.execute("SELECT id FROM visitors WHERE token_hash = ? AND expires_at > ?", (hashlib.sha256(visitor_token.encode()).hexdigest(), now())).fetchone()
@@ -247,22 +247,30 @@ def project_for_visitor(project_id: str, visitor: dict[str, Any]) -> dict[str, A
                 "SELECT * FROM projects WHERE id = ? AND visitor_id = ? AND owner_user_id IS NULL AND status != 'deleted'", (project_id, visitor["id"])
             ).fetchone())
     if not project:
-        fail(404, "找不到该品牌项目", "project_not_found")
+        fail(404, "鎵句笉鍒拌鍝佺墝椤圭洰", "project_not_found")
     return project
+
+
+def current_round(messages: list[dict[str, Any]], session: dict[str, Any]) -> int:
+    """The highest message round number, falling back to the session counter."""
+    round_no = max((int(message.get("round_no") or 1) for message in messages), default=0)
+    return round_no or int(session.get("sequence") or 1)
 
 
 def session_payload(session: dict[str, Any]) -> dict[str, Any]:
     with connect() as connection:
         messages = [dict(row) for row in connection.execute(
-            "SELECT id, role, content, sequence, created_at FROM messages WHERE session_id = ? ORDER BY sequence", (session["id"],)
+            "SELECT id, role, content, sequence, round_no, created_at FROM messages WHERE session_id = ? ORDER BY sequence", (session["id"],)
         )]
         notes = [decode_record(dict(row)) for row in connection.execute(
             "SELECT * FROM field_notes WHERE session_id = ? ORDER BY sequence", (session["id"],)
         )]
-    user_count = sum(1 for message in messages if message["role"] == "user")
-    finish_prompt_seen = any(message["role"] == "assistant" and "结束本次采风" in str(message.get("content") or "") for message in messages)
+    round_no = current_round(messages, session)
+    in_round = [message for message in messages if int(message.get("round_no") or 1) == round_no]
+    user_count = sum(1 for message in in_round if message["role"] == "user")
+    finish_prompt_seen = any(message["role"] == "assistant" and "结束本次采风" in str(message.get("content") or "") for message in in_round)
     ready_to_finish = session["status"] == "active" and (user_count >= 3 or finish_prompt_seen)
-    return {**session, "messages": messages, "field_notes": notes, "ready_to_finish": ready_to_finish}
+    return {**session, "round": round_no, "messages": messages, "field_notes": notes, "ready_to_finish": ready_to_finish}
 
 
 @router.post("/projects")
@@ -368,7 +376,7 @@ async def upload_media(
         fail(422, "仅支持上传图片文件", "invalid_media", "file")
     content = await request.body()
     if len(content) > settings.max_upload_bytes:
-        fail(422, "图片文件超过大小限制", "media_too_large", "file")
+        fail(422, "鍥剧墖鏂囦欢瓒呰繃澶у皬闄愬埗", "media_too_large", "file")
     with connect() as connection:
         count = connection.execute("SELECT COUNT(*) FROM media_assets WHERE project_id = ?", (project_id,)).fetchone()[0]
         if count >= 5:
@@ -389,10 +397,12 @@ async def upload_media(
 
 
 OPENING_QUESTION = "从这份品牌的来处讲起：最初是谁、因为什么开始做这件事？"
+# 续轮开场：保留既有对话，开始新一轮采风。区别于 OPENING_QUESTION，暗示"接着聊"。
+CONTINUATION_QUESTION = "上一轮已经记下了一些材料。这一轮接着采风：还有哪些关于来处、工艺、人物或现场的细节，是你希望被记下来的？"
 FOLLOW_UPS = [
     "你提到的这件事里，有没有一个具体的人或场景，是你希望被记下来的？",
     "产品从采收或原料到成品，哪一个环节最能说明你们是怎么做的？",
-    "这片产地或当地生活里，有没有一个真实细节，让你觉得它和别处不一样？",
+    "杩欑墖浜у湴鎴栧綋鍦扮敓娲婚噷锛屾湁娌℃湁涓€涓湡瀹炵粏鑺傦紝璁╀綘瑙夊緱瀹冨拰鍒涓嶄竴鏍凤紵",
 ]
 NOTE_TYPES = ["BRAND", "PEOPLE", "PROCESS"]
 NOTE_TITLES = ["品牌的来处", "被提到的人与现场", "产品与工艺细节"]
@@ -423,11 +433,11 @@ def fieldwork_model_result(
         result = provider.chat_json(
             model=settings.openai_next_text_model,
             instruction=(
-                "整理本轮采风并决定最高信息增益的下一问。只输出JSON："
+                "整理本轮采风并决定下一问，只输出JSON。"
                 "{field_note:{type,title,summary},claims:[{statement,claim_type,risk}],"
                 "known_information:[...],next_question,done}。"
-                "不得重复基础建档中的品牌名、品类、核心产品、产地；不得重复历史问题。"
-                "最多进行四轮用户回答：answer_count>=3时可以done=true，answer_count>=4必须done=true。"
+                "不得重复基础建档中的信息或历史问题。"
+                "最多进行四轮用户回答，answer_count>=4 时必须 done=true。"
                 "图片只可描述可见内容，不得由画面推断功效、产地或身份。"
             ),
             context={"project": project, "history": history, "latest_answer": user_text, "answer_count": answer_count},
@@ -444,10 +454,14 @@ def fieldwork_model_result(
         return fallback, "fallback"
 
 
-def add_message(connection: Any, session_id: str, role: str, content: str) -> dict[str, Any]:
+def add_message(connection: Any, session_id: str, role: str, content: str, round_no: int = 1) -> dict[str, Any]:
     sequence = connection.execute("SELECT COUNT(*) FROM messages WHERE session_id = ?", (session_id,)).fetchone()[0] + 1
-    message = {"id": new_id(), "session_id": session_id, "role": role, "content": content, "sequence": sequence, "created_at": now()}
-    connection.execute("INSERT INTO messages VALUES (:id, :session_id, :role, :content, :sequence, :created_at)", message)
+    message = {"id": new_id(), "session_id": session_id, "role": role, "content": content, "sequence": sequence, "round_no": round_no, "created_at": now()}
+    # 显式列名：迁移后的旧库 round_no 追加在末尾，新建库则位于 created_at 之前。
+    connection.execute(
+        "INSERT INTO messages (id, session_id, role, content, sequence, round_no, created_at) VALUES (:id, :session_id, :role, :content, :sequence, :round_no, :created_at)",
+        message,
+    )
     return message
 
 
@@ -483,15 +497,17 @@ def create_message(
 ) -> dict[str, Any]:
     session, project = session_for_visitor(session_id, visitor)
     if session["status"] != "active":
-        fail(409, "本次采风已经结束", "session_closed")
+        fail(409, "鏈閲囬宸茬粡缁撴潫", "session_closed")
     if not payload.skipped and not payload.content.strip() and not payload.media_asset_ids:
-        fail(422, "请填写回答、上传图片或跳过本题", "empty_message", "content")
+        fail(422, "璇峰～鍐欏洖绛斻€佷笂浼犲浘鐗囨垨璺宠繃鏈", "empty_message", "content")
     with connect() as connection:
+        rounds = [row["round_no"] for row in connection.execute("SELECT round_no FROM messages WHERE session_id = ?", (session_id,))]
+        round_no = max(rounds) if rounds else int(session.get("sequence") or 1)
         completed_answers = connection.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'", (session_id,)
+            "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND round_no = ?", (session_id, round_no)
         ).fetchone()[0]
-        if completed_answers >= 4:
-            fail(409, "本轮采风已经收束，请结束本次采风并确认候选档案", "fieldwork_ready_to_finish")
+        if completed_answers >= 5:
+            fail(409, "本轮采风已足够，继续整理候选档案即可。", "fieldwork_ready_to_finish")
         if idempotency_key:
             task = row_dict(connection.execute("SELECT * FROM tasks WHERE idempotency_key = ?", (idempotency_key,)).fetchone())
             if task:
@@ -503,9 +519,9 @@ def create_message(
             ).fetchone()[0]
             if valid_count != len(payload.media_asset_ids):
                 fail(422, "图片不属于当前项目", "invalid_media", "media_asset_ids")
-        user_text = "已跳过此题" if payload.skipped else payload.content.strip()
-        add_message(connection, session_id, "user", user_text)
-        answer_count = connection.execute("SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'", (session_id,)).fetchone()[0]
+        user_text = "跳过本题" if payload.skipped else payload.content.strip()
+        add_message(connection, session_id, "user", user_text, round_no=round_no)
+        answer_count = connection.execute("SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND round_no = ?", (session_id, round_no)).fetchone()[0]
         note_id: str | None = None
         if not payload.skipped:
             note_index = connection.execute("SELECT COUNT(*) FROM field_notes WHERE session_id = ?", (session_id,)).fetchone()[0] + 1
@@ -541,7 +557,7 @@ def create_message(
                     """INSERT INTO source_records
                        (id, project_id, field_note_id, media_asset_id, source_type, source_ref, content, created_at)
                        VALUES (?, ?, ?, ?, 'image_description', ?, ?, ?)""",
-                    (source_id, project["id"], note_id, asset["id"], f"media:{asset['id']}", f"采风图片：{asset['original_name']}；模型仅据可见内容形成描述。", now()),
+                    (source_id, project["id"], note_id, asset["id"], f"media:{asset['id']}", f"采风图片：{asset['original_name']}", now()),
                 )
                 source_ids.append(source_id)
             claim_ids: list[str] = []
@@ -560,17 +576,18 @@ def create_message(
                        VALUES (?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?)""",
                     (claim_id, project["id"], note_id, str(raw_claim["statement"])[:1000], str(raw_claim.get("claim_type") or "user_statement")[:60], risk, json_value(source_ids), now(), now()),
                 )
-            add_message(connection, session_id, "system", f"已整理第 {note_index} 条采风笔记，并提取 {len(claim_ids)} 条待确认事实。")
+            add_message(connection, session_id, "system", f"已整理第 {note_index} 条采风笔记，并提取 {len(claim_ids)} 条待确认事实。", round_no=round_no)
         else:
             organized, mode = ({"done": answer_count >= 3, "next_question": FOLLOW_UPS[min(answer_count - 1, 2)]}, "skip")
         if not organized.get("done") and answer_count < 4:
             next_question = str(organized.get("next_question") or FOLLOW_UPS[min(answer_count - 1, 2)])
             previous_questions = {item["content"] for item in history if item["role"] == "assistant"} if not payload.skipped else set()
             if next_question in previous_questions:
-                next_question = FOLLOW_UPS[min(answer_count - 1, 2)]
-            add_message(connection, session_id, "assistant", next_question)
+                # 跨轮次不重复追问同一问题：向前选取一个尚未问过的跟进问题。
+                next_question = next((candidate for candidate in FOLLOW_UPS if candidate not in previous_questions), FOLLOW_UPS[min(answer_count - 1, 2)])
+            add_message(connection, session_id, "assistant", next_question, round_no=round_no)
         else:
-            add_message(connection, session_id, "assistant", "这一轮已经收集到几段可继续整理的材料。你可以结束本次采风，逐张确认候选档案。")
+            add_message(connection, session_id, "assistant", "本轮采风已足够收集到关键材料。你可以结束本次采风，进入候选确认。", round_no=round_no)
         task = {"id": new_id(), "project_id": project["id"], "kind": "follow_up", "status": "succeeded",
                 "result_json": json_value({"mode": mode, "field_note_id": note_id}), "error_code": organized.get("provider_error", {}).get("code") if isinstance(organized.get("provider_error"), dict) else None,
                 "idempotency_key": idempotency_key, "created_at": now(), "updated_at": now(),
@@ -594,16 +611,31 @@ def restart_fieldwork(
     project = project_for_visitor(project_id, visitor)
     with connect() as connection:
         existing = row_dict(connection.execute("SELECT * FROM sessions WHERE project_id = ? ORDER BY started_at DESC LIMIT 1", (project_id,)).fetchone())
-        if existing and existing["status"] == "active":
-            return envelope({"session": session_payload(existing)})
         if existing:
-            connection.execute("DELETE FROM field_notes WHERE session_id = ?", (existing["id"],))
-            connection.execute("DELETE FROM messages WHERE session_id = ?", (existing["id"],))
-            connection.execute("DELETE FROM sessions WHERE id = ?", (existing["id"],))
-        session = {"id": new_id(), "project_id": project_id, "sequence": 1, "status": "active", "started_at": now(), "ended_at": None}
-        connection.execute("INSERT INTO sessions VALUES (:id, :project_id, :sequence, :status, :started_at, :ended_at)", session)
-        add_message(connection, session["id"], "assistant", OPENING_QUESTION)
-        connection.execute("UPDATE projects SET status = 'active', current_stage = 'fieldwork', updated_at = ? WHERE id = ?", (now(), project_id))
+            rounds = [row["round_no"] for row in connection.execute("SELECT round_no FROM messages WHERE session_id = ?", (existing["id"],))]
+            round_no = max(rounds) if rounds else int(existing.get("sequence") or 1)
+            answered = connection.execute(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND round_no = ?", (existing["id"], round_no)
+            ).fetchone()[0]
+            # 采风仍在进行且回答不足 3 条：直接恢复原会话，不开新轮。
+            if existing["status"] == "active" and answered < 3:
+                return envelope({"session": session_payload(existing)})
+            # 已收束 / 已结束 / 卡在待结束：开启新一轮，保留既有对话与笔记。
+            next_round = round_no + 1
+            connection.execute(
+                "UPDATE sessions SET sequence = ?, status = 'active', ended_at = NULL WHERE id = ?", (next_round, existing["id"])
+            )
+            existing["sequence"] = next_round
+            existing["status"] = "active"
+            existing["ended_at"] = None
+            add_message(connection, existing["id"], "assistant", CONTINUATION_QUESTION, round_no=next_round)
+            connection.execute("UPDATE projects SET status = 'active', current_stage = 'fieldwork', updated_at = ? WHERE id = ?", (now(), project_id))
+            session = existing
+        else:
+            session = {"id": new_id(), "project_id": project_id, "sequence": 1, "status": "active", "started_at": now(), "ended_at": None}
+            connection.execute("INSERT INTO sessions VALUES (:id, :project_id, :sequence, :status, :started_at, :ended_at)", session)
+            add_message(connection, session["id"], "assistant", OPENING_QUESTION, round_no=1)
+            connection.execute("UPDATE projects SET status = 'active', current_stage = 'fieldwork', updated_at = ? WHERE id = ?", (now(), project_id))
     return envelope({"session": session_payload(session)})
 
 
@@ -619,22 +651,29 @@ def finish_session(
             candidates = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM candidates WHERE project_id = ?", (project["id"],))]
             return envelope({"session": session, "candidates": candidates})
         notes = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM field_notes WHERE session_id = ? ORDER BY sequence", (session_id,))]
-        if notes:
-            for note in notes:
+        referenced_note_ids: set[str] = set()
+        for row in connection.execute("SELECT field_note_ids_json FROM candidates WHERE project_id = ?", (project["id"],)):
+            referenced_note_ids.update(str(note_id) for note_id in json.loads(row["field_note_ids_json"] or "[]"))
+        new_notes = [note for note in notes if note["id"] not in referenced_note_ids]
+        if new_notes:
+            for note in new_notes:
                 connection.execute(
                     "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
                     (new_id(), project["id"], json_value([note["id"]]), note["type"], note["title"], note["summary"], now()),
                 )
         else:
-            for candidate_type, title, content in (
-                ("BRAND", "品牌主体", project["brand_name"]),
-                ("PRODUCT", "产品产业", project["industry"] or project["core_product"]),
-                ("ORIGIN", "主要产地", project["origin"]),
-            ):
-                connection.execute(
-                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-                    (new_id(), project["id"], json_value([]), candidate_type, title, content, now()),
-                )
+            candidate_count = connection.execute("SELECT COUNT(*) FROM candidates WHERE project_id = ?", (project["id"],)).fetchone()[0]
+            if candidate_count == 0:
+                # 全程没有采风笔记、也从没生成过候选时，用基础建档兜底。
+                for candidate_type, title, content in (
+                    ("BRAND", "品牌主体", project["brand_name"]),
+                    ("PRODUCT", "产品产业", project["industry"] or project["core_product"]),
+                    ("ORIGIN", "主要产地", project["origin"]),
+                ):
+                    connection.execute(
+                        "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+                        (new_id(), project["id"], json_value([]), candidate_type, title, content, now()),
+                    )
         ended = now()
         connection.execute("UPDATE sessions SET status = 'completed', ended_at = ? WHERE id = ?", (ended, session_id))
         connection.execute("UPDATE projects SET status = 'fieldwork_completed', updated_at = ? WHERE id = ?", (ended, project["id"]))
