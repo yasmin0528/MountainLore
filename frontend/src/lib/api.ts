@@ -2,6 +2,23 @@
 // so the visitor cookie remains attached when the app is opened through LAN IPs.
 const apiBase = "/api";
 
+/**
+ * `crypto.randomUUID` is only guaranteed in secure browser contexts.  The
+ * LAN development address uses plain HTTP, so provide a client-side fallback
+ * for request and upload identifiers instead of failing before `fetch` runs.
+ */
+export function createRequestId(prefix = "request"): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+/** HTTP header values cannot carry a raw UTF-8 filename. */
+export function encodeFileNameForHeader(fileName: string): string {
+  return encodeURIComponent(fileName);
+}
+
 type ApiFailure = { error?: { message?: string }; detail?: string | { message?: string } };
 
 export class ApiError extends Error {

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
+import { api, createRequestId, encodeFileNameForHeader } from "@/lib/api";
 import type { ArchiveCard, Claim, Direction, ManualAsset, ManualVersion, Project, Workspace } from "@/components/workbench-app";
 
 type ManualContent = Record<string, unknown>;
@@ -13,18 +13,20 @@ function routeContent(route?: Direction) { return (route?.content_json ?? route?
 function words(value: unknown) { return Array.isArray(value) ? value.map(String) : []; }
 function text(value: unknown, fallback = "") { return typeof value === "string" && value.trim() ? value : fallback; }
 
-export function ProjectDirectory({ projects, onSelect, onCreate }: { projects: Project[]; onSelect: (project: Project) => void; onCreate: () => void }) {
+export function ProjectDirectory({ projects, onSelect, onDelete, onCreate }: { projects: Project[]; onSelect: (project: Project) => void; onDelete: (project: Project) => void; onCreate: () => void }) {
   const directory = projects.length ? projects : [];
   return <section className="archive-directory">
     <header className="archive-directory-head"><p className="eyebrow">档案</p><h1>先选品牌项目，再翻开它的资料</h1><p>不同品牌各有一套独立的材料、路线和出山记录。</p></header>
     <div className="directory-toolbar"><div><p className="eyebrow">个人品牌项目</p><h2>选定一个项目，再查看它的品牌资料。</h2></div><button className="secondary-button" onClick={onCreate}>＋ 新建品牌档案</button></div>
     <div className="project-directory-grid">
-      {directory.map((item, index) => <button className="project-directory-card" key={item.id} onClick={() => onSelect(item)}>
-        <span className="directory-tab" style={{ backgroundColor: projectColors[index % projectColors.length] }}>{(item.industry || item.core_product || "档").slice(0, 1)}</span>
-        <i style={{ backgroundColor: projectColors[index % projectColors.length] }} aria-hidden="true" />
-        <small>{item.core_product || item.industry}</small><strong>{item.brand_name || projectNames[index % projectNames.length]}</strong>
-        <footer><span>{item.current_stage === "archive" ? "资料待整理" : "已有品牌资料"}</span><b>打开品牌资料 →</b></footer>
-      </button>)}
+      {directory.map((item, index) => <article className="project-directory-card" key={item.id}>
+        <button className="project-directory-open" onClick={() => onSelect(item)} aria-label={`打开 ${item.brand_name} 的品牌资料`}>
+          <span className="directory-tab" style={{ backgroundColor: projectColors[index % projectColors.length] }}>{(item.industry || item.core_product || "档").slice(0, 1)}</span>
+          <i style={{ backgroundColor: projectColors[index % projectColors.length] }} aria-hidden="true" />
+          <small>{item.core_product || item.industry}</small><strong>{item.brand_name || projectNames[index % projectNames.length]}</strong>
+        </button>
+        <footer><button className="directory-delete" onClick={() => onDelete(item)}>删除</button><b>打开品牌资料 →</b></footer>
+      </article>)}
     </div>
     {!directory.length && <div className="empty-state"><p>还没有可翻阅的品牌项目。</p><button className="secondary-button" onClick={onCreate}>从采风开始</button></div>}
     <p className="directory-footnote">每个品牌的资料、判断和出山记录彼此独立。选定项目后，所有侧签只切换该项目的档案卡。</p>
@@ -34,12 +36,13 @@ export function ProjectDirectory({ projects, onSelect, onCreate }: { projects: P
 export function BrandMaterials({ workspace, onOpenArchive, onOpenManual, onOpenRecords }: { workspace: Workspace; onOpenArchive: () => void; onOpenManual: () => void; onOpenRecords: () => void }) {
   const active = workspace.archive_cards.filter((card) => card.status === "active");
   const current = workspace.directions.find((route) => route.state === "current");
+  const manualReady = Boolean(workspace.manual);
   return <section className="materials-page">
     <header className="materials-topline"><span>{workspace.project.origin} · {workspace.project.core_product}</span><small>● 资料已保留</small></header>
     <header className="materials-heading"><p className="eyebrow">档案 · 品牌资料</p><h1>{workspace.project.brand_name} · 品牌资料</h1><p>先翻开一张缩略卡，再查看已经留下的品牌材料。</p></header>
     <div className="materials-shelf">
       <button className="material-thumb archive-thumb" onClick={onOpenArchive}><header><span>档案卡片</span><small>点击抽出档案</small></header><div className="mini-accordion"><i>品牌故事</i><i>产品信息</i><i>{workspace.project.brand_name}</i></div><footer><b>{active.length} 项资料</b><span>翻开 →</span></footer></button>
-      <button className="material-thumb manual-thumb" onClick={onOpenManual}><header><span>品牌手册</span><small>{current ? "定调后启用" : "待选择路线"}</small></header><p className="manual-brand-small">{workspace.project.brand_name}</p><h2>{current ? text(routeContent(current).brand_one_liner, "为品牌定下一句话") : "从已确认档案，定下一条路线。"}</h2><div className="mini-manual-image"><span>AI 概念稿</span></div><footer><b>{current ? "打开定调" : "生成两条路线"}</b><span>查看 →</span></footer></button>
+      <button className={`material-thumb manual-thumb ${manualReady ? "is-ready" : "is-empty"}`} onClick={onOpenManual}><header><span>品牌手册</span><small>{manualReady ? "已生成" : "尚未生成"}</small></header><p className="manual-brand-small">{workspace.project.brand_name}</p><h2>{manualReady ? text(routeContent(current).brand_one_liner, "打开品牌手册") : "Logo、字体与颜色方案待设置"}</h2><div className="mini-manual-image">{manualReady ? <span>HTML SLIDE · {workspace.manual_versions?.length ?? 1} 版</span> : <><i>＋</i><span>首次打开后开始引导</span></>}</div><footer><b>{manualReady ? "打开品牌手册" : "开始定调"}</b><span>查看 →</span></footer></button>
       <button className="material-thumb record-thumb" onClick={onOpenRecords}><header><span>出山记录</span><small>已经做过的版本</small></header><ol>{workspace.generation_jobs.slice(0, 3).map((job) => <li key={job.id}><time>{job.template_type === "xiaohongshu" ? "图文" : "周边"}</time><b>{job.status === "succeeded" ? "概念稿已保存" : "文字 Brief 已保留"}</b></li>)}{!workspace.generation_jobs.length && <li><time>—</time><b>尚未出山</b></li>}</ol><footer><b>{workspace.generation_jobs.length} 次出山</b><span>继续使用 →</span></footer></button>
     </div>
   </section>;
@@ -165,7 +168,7 @@ export function BrandManualDialog({ project, cards, claims, directions, manual, 
     const file = event.target.files?.[0];
     if (!file) return;
     setNotice("正在保存 Logo…");
-    const uploaded = await api<{ data: { id: string } }>("/media", { method: "POST", body: file, headers: { "Content-Type": file.type, "X-Project-ID": project.id, "X-File-Name": file.name } });
+    const uploaded = await api<{ data: { id: string } }>("/media", { method: "POST", body: file, headers: { "Content-Type": file.type, "X-Project-ID": project.id, "X-File-Name": encodeFileNameForHeader(file.name) } });
     await api(`/projects/${project.id}/brand-manual/assets/logo_mark`, { method: "POST", body: JSON.stringify({ media_asset_id: uploaded.data.id }) });
     set("logo_preview", `/api/media/${uploaded.data.id}`);
     await onRefresh();
@@ -173,7 +176,7 @@ export function BrandManualDialog({ project, cards, claims, directions, manual, 
   };
   const createExports = async () => {
     setNotice("正在生成 PDF 与视觉图包…");
-    await api(`/projects/${project.id}/brand-manual/exports`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ formats: ["pdf", "zip"] }) });
+    await api(`/projects/${project.id}/brand-manual/exports`, { method: "POST", headers: { "Idempotency-Key": createRequestId("export") }, body: JSON.stringify({ formats: ["pdf", "zip"] }) });
     await onRefresh();
     setNotice("导出任务已创建，可关闭页面稍后回来下载。");
   };
@@ -201,7 +204,7 @@ export function BrandManualDialog({ project, cards, claims, directions, manual, 
           <section className="manual-asset-gallery"><p className="eyebrow">视觉资产画廊</p><div>{assets.map((asset) => <figure key={asset.id}>{asset.url ? <img src={asset.url} alt={asset.kind} /> : <span>待生成</span>}<figcaption>{asset.kind === "logo_mark" ? "Logo 图形方向" : asset.kind === "packaging_key_visual" ? "包装主视觉" : "延展纹样"}<small>AI 概念资产；说明仅在元数据中展示</small></figcaption></figure>)}</div></section>
           {Array.isArray(draft.evidence_gaps) && draft.evidence_gaps.length > 0 && <section className="manual-gaps"><p className="eyebrow">待补证据</p><ul>{draft.evidence_gaps.map((gap) => <li key={String(gap)}>{String(gap)}</li>)}</ul></section>}
         </section>
-        <footer className="manual-route-footer"><div><p className="eyebrow">两条差异路线</p>{routeChoices.length ? routeChoices.map((route) => <button key={route.id} className={route.state === "current" ? "is-current" : ""} onClick={() => onSelectRoute(route.id)}><b>路线 0{route.route_no}</b><span>{route.title}</span>{route.state === "current" && <small>current</small>}</button>) : <span>确认档案后生成两条路线</span>}{current && !routeChoices.some((route) => route.id === current.id) && <small className="route-current-note">当前仍为「{current.title}」，选择新路线才会覆盖。</small>}</div><div><button className="secondary-button" disabled={busy} onClick={onRegenerate}>{visibleRoutes.length ? "重新生成" : "生成两条路线"}</button><button className="primary-button" disabled={busy || !current} onClick={() => onSave({ ...draft, brand_name: project.brand_name })}>{busy ? "正在保存…" : "保存手册"}</button></div></footer>
+        <footer className="manual-route-footer"><div><p className="eyebrow">三条差异路线</p>{routeChoices.length ? routeChoices.map((route) => <button key={route.id} className={route.state === "current" ? "is-current" : ""} onClick={() => onSelectRoute(route.id)}><b>路线 0{route.route_no}</b><span>{route.title}</span>{route.state === "current" && <small>current</small>}</button>) : <span>首次打开手册后生成三条路线</span>}{current && !routeChoices.some((route) => route.id === current.id) && <small className="route-current-note">当前仍为「{current.title}」，选择新路线才会覆盖。</small>}</div><div><button className="secondary-button" disabled={busy} onClick={onRegenerate}>{visibleRoutes.length ? "重新生成" : "生成三条路线"}</button><button className="primary-button" disabled={busy || !current} onClick={() => onSave({ ...draft, brand_name: project.brand_name })}>{busy ? "正在保存…" : "保存手册"}</button></div></footer>
         {historicalRoutes.length > 0 && <details className="manual-history"><summary>查看旧版本（{historicalRoutes.length}）</summary>{historicalRoutes.map((route) => <article key={route.id}><b>路线 0{route.route_no}</b><span>{route.title}</span><small>历史版本，只读不覆盖 current</small></article>)}</details>}
         <section className="manual-delivery"><details><summary>版本历史（{versions.length}）</summary>{versions.map((version) => <article key={version.id}><b>v{version.version}</b><span>{version.status}</span><small>{new Date(version.created_at).toLocaleString("zh-CN")}</small></article>)}</details><div>{exports.map((item) => item.download_url && <a className="secondary-button" key={item.id} href={item.download_url}>{item.format.toUpperCase()} 下载</a>)}</div><details><summary>分享管理（{shares.length}）</summary>{shares.map((item) => <article key={item.id}><span>{new Date(item.created_at).toLocaleString("zh-CN")}</span>{item.revoked_at ? <small>已撤销</small> : <button className="text-button" onClick={() => void revoke(item.id)}>撤销</button>}</article>)}</details></section>
       </article>

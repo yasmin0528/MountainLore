@@ -9,12 +9,12 @@ from fastapi import APIRouter, Depends, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app.api.routes.fieldwork import current_visitor, envelope, fail, project_for_visitor
+from app.api.routes.fieldwork import current_visitor, envelope, fail, project_for_visitor, session_payload
 from app.core.config import settings
 from app.fieldwork.store import connect, decode_record, json_value, new_id, now, row_dict
 from app.services.providers import ProviderError, provider
 from app.services.tide_report import latest_report_for_project, shared_idea_for_project
-from app.services.workflow import create_task, execute_task, hash_share_token, project_snapshot, submit_task
+from app.services.workflow import create_manual_skeleton, create_task, execute_task, hash_share_token, project_snapshot, submit_task
 
 router = APIRouter()
 
@@ -27,6 +27,8 @@ class CardPatch(BaseModel):
 
 class DirectionCreate(BaseModel):
     request_id: str | None = None
+    defer_directions: bool = False
+    visual_preferences: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManualPatch(BaseModel):
@@ -123,6 +125,7 @@ def get_workspace(project_id: str, visitor: Annotated[dict[str, Any], Depends(cu
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         project = row_dict(connection.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
+        session = row_dict(connection.execute("SELECT * FROM sessions WHERE project_id = ?", (project_id,)).fetchone())
         cards = records(connection, "SELECT * FROM archive_cards WHERE project_id = ? ORDER BY created_at", (project_id,))
         directions = directions_for_project(connection, project_id)
         manual = row_dict(connection.execute("SELECT * FROM brand_manuals WHERE project_id = ?", (project_id,)).fetchone())
@@ -135,6 +138,8 @@ def get_workspace(project_id: str, visitor: Annotated[dict[str, Any], Depends(cu
             connection,
             """SELECT manual_assets.*, media_assets.original_name, media_assets.mime_type
                FROM manual_assets LEFT JOIN media_assets ON media_assets.id = manual_assets.media_asset_id
+               JOIN brand_manuals ON brand_manuals.project_id = manual_assets.project_id
+                 AND brand_manuals.current_version_id = manual_assets.manual_version_id
                WHERE manual_assets.project_id = ? ORDER BY manual_assets.created_at""",
             (project_id,),
         )
@@ -148,7 +153,7 @@ def get_workspace(project_id: str, visitor: Annotated[dict[str, Any], Depends(cu
         for tide in tides:
             tide["cards"] = records(connection, "SELECT * FROM inspiration_cards WHERE tide_search_id = ?", (tide["id"],))
         jobs = records(connection, "SELECT * FROM generation_jobs WHERE project_id = ? ORDER BY created_at DESC", (project_id,))
-    return envelope({"project": project, "archive_cards": cards, "claims": claims, "directions": directions, "tasks": tasks, "manual": manual, "manual_versions": manual_versions, "manual_assets": manual_assets, "exports": exports, "shares": shares, "tide_searches": tides, "generation_jobs": jobs})
+    return envelope({"project": project, "session": session_payload(session) if session else None, "archive_cards": cards, "claims": claims, "directions": directions, "tasks": tasks, "manual": manual, "manual_versions": manual_versions, "manual_assets": manual_assets, "exports": exports, "shares": shares, "tide_searches": tides, "generation_jobs": jobs})
 
 
 @router.get("/projects/{project_id}/brand-manual")
@@ -236,6 +241,13 @@ def create_directions(project_id: str, payload: DirectionCreate, visitor: Annota
         snapshot = project_snapshot(connection, project_id)
         if not snapshot["archive_cards"]:
             fail(422, "请先确认至少一张档案卡", "archive_required")
+        preferences = dict(payload.visual_preferences)
+        logo_media_id = preferences.get("logo_media_asset_id")
+        if logo_media_id:
+            media = row_dict(connection.execute("SELECT id FROM media_assets WHERE id = ? AND project_id = ?", (logo_media_id, project_id)).fetchone())
+            if not media:
+                fail(422, "Logo 图片不属于当前项目", "invalid_media")
+        snapshot["visual_preferences"] = preferences
     key = idempotency_key or (f"directions:{project_id}:{payload.request_id}" if payload.request_id else None)
     task, created = create_task(project_id, "route_generation", snapshot, key)
     if created:
@@ -255,6 +267,12 @@ def confirm_chronicle(project_id: str, payload: DirectionCreate, visitor: Annota
         snapshot = project_snapshot(connection, project_id)
         if not snapshot["archive_cards"]:
             fail(422, "请先确认至少一张档案卡", "archive_required")
+        if payload.defer_directions:
+            connection.execute(
+                "UPDATE projects SET current_stage = 'archive', status = 'archive_ready', updated_at = ? WHERE id = ?",
+                (now(), project_id),
+            )
+            return envelope({"task": None, "routes": [], "deferred": True})
     key = idempotency_key or f"chronicle:{project_id}:{payload.request_id or 'confirm'}"
     task, created = create_task(project_id, "route_generation", snapshot, key)
     if created:
@@ -275,18 +293,45 @@ def select_direction(direction_id: str, visitor: Annotated[dict[str, Any], Depen
             fail(404, "找不到品牌路线", "direction_not_found")
         project_for_visitor(direction["project_id"], visitor)
         connection.execute("UPDATE brand_directions SET state = CASE WHEN id = ? THEN 'current' WHEN state = 'current' THEN 'superseded' ELSE state END WHERE project_id = ?", (direction_id, direction["project_id"]))
-        connection.execute("UPDATE projects SET current_direction_id = ?, current_stage = 'positioning', status = 'generating_manual', updated_at = ? WHERE id = ?", (direction_id, now(), direction["project_id"]))
+        connection.execute("UPDATE projects SET current_direction_id = ?, current_stage = 'positioning', status = 'manual_ready', updated_at = ? WHERE id = ?", (direction_id, now(), direction["project_id"]))
         selected = decode_record(row_dict(connection.execute("SELECT * FROM brand_directions WHERE id = ?", (direction_id,)).fetchone()))
         snapshot = project_snapshot(connection, direction["project_id"])
         snapshot["direction"] = {**selected, "content": selected.get("content", {})}
-    key = idempotency_key or f"manual:{direction_id}:{selected['version']}"
-    task, created = create_task(direction["project_id"], "manual_generation", snapshot, key)
+    manual = create_manual_skeleton(direction["project_id"], snapshot)
+    preferences = selected.get("content", {}).get("visual_preferences") or {}
+    logo_task = None
+    if not preferences.get("logo_media_asset_id") and provider.live:
+        logo_snapshot = {**snapshot, "manual_version_id": manual["manual_version_id"], "asset_kind": "logo_mark"}
+        # Keep this separate from the legacy manual task idempotency key so an
+        # older in-flight manual task cannot suppress the new Logo-only task.
+        key = f"logo:{direction_id}:{manual['manual_version_id']}"
+        logo_task, created = create_task(direction["project_id"], "logo_generation", logo_snapshot, key)
+        if created:
+            submit_task(logo_task["id"])
+    return envelope({**selected, "direction": selected, "manual": manual, "task": logo_task})
+
+
+@router.post("/projects/{project_id}/brand-manual/generate-assets/{kind}")
+def generate_manual_asset(project_id: str, kind: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)], idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None) -> dict[str, Any]:
+    project_for_visitor(project_id, visitor)
+    if kind not in {"extension_pattern", "packaging_key_visual"}:
+        fail(422, "仅支持按需生成延展纹样或包装主视觉", "invalid_asset_kind")
+    if not provider.live:
+        fail(409, "演示模式不生成图片资产", "image_provider_not_configured")
+    with connect() as connection:
+        manual = row_dict(connection.execute("SELECT * FROM brand_manuals WHERE project_id = ?", (project_id,)).fetchone())
+        current = require_current_direction(connection, project_id)
+        if not manual or not manual.get("current_version_id"):
+            fail(422, "请先选择一条路线生成品牌手册", "manual_required")
+        snapshot = project_snapshot(connection, project_id)
+        selected = decode_record(current)
+        snapshot["direction"] = {**selected, "content": selected.get("content", {})}
+        snapshot["manual_version_id"] = manual["current_version_id"]
+        snapshot["asset_kind"] = kind
+    task, created = create_task(project_id, "manual_asset_generation", snapshot, idempotency_key or f"asset:{kind}:{snapshot['manual_version_id']}")
     if created:
-        if provider.live:
-            submit_task(task["id"])
-        else:
-            task = execute_task(task["id"])
-    return envelope({**selected, "direction": selected, "task": task})
+        submit_task(task["id"])
+    return envelope({"task": task})
 
 
 @router.post("/projects/{project_id}/brand-manual/assets/{kind}")

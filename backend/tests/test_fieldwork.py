@@ -90,3 +90,27 @@ def test_legacy_projects_table_is_migrated_before_creating_a_project(tmp_path, m
             json={"brand_name": "迁移测试", "industry": "刺梨", "core_product": "刺梨原汁", "origin": "贵州", "consent": True},
         )
     assert response.status_code == 200
+
+
+def test_delete_project_removes_the_visitor_owned_project(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "delete-project.db"
+    monkeypatch.setattr(settings, "database_path", str(database))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+
+    with TestClient(app) as client:
+        assert client.post("/api/visitors").status_code == 200
+        created = client.post(
+            "/api/projects",
+            json={
+                "brand_name": "Delete Me",
+                "industry": "tea",
+                "core_product": "green tea",
+                "origin": "Guizhou",
+                "consent": True,
+            },
+        ).json()["data"]
+        deleted = client.delete(f"/api/projects/{created['id']}")
+        assert deleted.status_code == 200
+        assert deleted.json()["data"]["status"] == "deleted"
+        assert client.get("/api/projects").json()["data"] == []
+        assert client.get(f"/api/projects/{created['id']}").status_code == 404
