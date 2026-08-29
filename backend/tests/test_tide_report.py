@@ -94,3 +94,48 @@ def test_weekly_source_allowlist_rejects_non_public_and_non_https() -> None:
     assert is_allowed_source_url("https://www.xiaohongshu.com/explore/1")
     assert not is_allowed_source_url("http://www.foodaily.com/article/1")
     assert not is_allowed_source_url("https://example.com/article/1")
+
+
+def test_tide_provider_uses_its_own_models_and_credentials(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    monkeypatch.setattr(settings, "openai_next_api_key", "global-key")
+    monkeypatch.setattr(settings, "openai_next_base_url", "https://global.example/v1")
+    monkeypatch.setattr(settings, "openai_next_text_model", "global-model")
+    monkeypatch.setattr(settings, "tide_api_key", "tide-key")
+    monkeypatch.setattr(settings, "tide_api_base_url", "https://tide.example/v1")
+    monkeypatch.setattr(settings, "tide_search_model", "sonar-medium-online")
+    monkeypatch.setattr(settings, "tide_synthesis_model", "kimi-k3")
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(provider, "_chat_json", _capture)
+    assert provider.tide_chat_json(model=settings.tide_search_model, instruction="search", context={}) == {"ok": True}
+    assert captured["base_url"] == "https://tide.example/v1"
+    assert captured["api_key"] == "tide-key"
+    assert captured["model"] == "sonar-medium-online"
+    assert captured["temperature"] is None
+    readiness = provider.readiness()
+    assert readiness["capabilities"]["tide"] == {
+        "configured": True,
+        "model": "kimi-k3",
+        "search_model": "sonar-medium-online",
+        "status": "configured",
+    }
+    assert readiness["text_model"] == "global-model"
+
+
+def test_tide_k3_synthesis_uses_gateway_compatible_temperature(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "tide_synthesis_model", "kimi-k3")
+    captured: dict[str, object] = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return {"ideas": []}
+
+    monkeypatch.setattr(provider, "tide_chat_json", _capture)
+    assert provider.weekly_tide_ideas([], []) == []
+    assert captured["model"] == "kimi-k3"
+    assert captured["temperature"] == 1

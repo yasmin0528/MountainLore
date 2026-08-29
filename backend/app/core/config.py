@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     openai_next_api_key: str = ""
     openai_next_text_model: str = "gpt-5.5"
     openai_next_tide_model: str = "sonar"
+    tide_api_base_url: str = "https://api.openai-next.com/v1"
+    tide_api_key: str = ""
+    tide_search_model: str = "sonar-medium-online"
+    tide_synthesis_model: str = "kimi-k3"
     openai_next_image_base_url: str = "https://draw.openai-next.com/v1"
     openai_next_image_api_key: str = ""
     openai_next_image_model: str = "gpt-image-2"
@@ -55,6 +59,10 @@ class Settings(BaseSettings):
     @property
     def resolved_image_api_key(self) -> str:
         return self.openai_next_image_api_key or self.openai_next_api_key
+
+    @property
+    def tide_configured(self) -> bool:
+        return bool(self.tide_api_key)
 
 
 @lru_cache

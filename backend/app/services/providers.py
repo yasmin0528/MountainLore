@@ -75,19 +75,25 @@ class CreditsProvider:
 
     def readiness(self) -> dict[str, Any]:
         configured = bool(settings.openai_next_api_key)
+        tide_configured = settings.tide_configured
         return {
             "mode": "live" if self.live else "demo",
             "capabilities": {
                 "fieldwork": {"configured": configured, "model": settings.openai_next_text_model, "status": "configured" if configured else "missing_key"},
                 "brand": {"configured": configured, "model": settings.openai_next_text_model, "status": "configured" if configured else "missing_key"},
-                "tide": {"configured": configured, "model": settings.openai_next_tide_model, "status": "configured" if configured else "missing_key"},
+                "tide": {
+                    "configured": tide_configured,
+                    "model": settings.tide_synthesis_model,
+                    "search_model": settings.tide_search_model,
+                    "status": "configured" if tide_configured else "missing_key",
+                },
                 "image": {"configured": bool(settings.resolved_image_api_key), "model": settings.openai_next_image_model, "status": "unverified" if settings.resolved_image_api_key else "missing_key"},
             },
             # Kept for older clients while the UI migrates to capabilities.
             "text_configured": configured,
             "image_configured": bool(settings.resolved_image_api_key),
             "text_model": settings.openai_next_text_model,
-            "tide_model": settings.openai_next_tide_model,
+            "tide_model": settings.tide_synthesis_model,
             "image_model": settings.openai_next_image_model,
         }
 
@@ -111,10 +117,39 @@ class CreditsProvider:
         self, *, model: str, instruction: str, context: dict[str, Any],
         image_paths: list[str] | None = None,
     ) -> dict[str, Any]:
+        return self._chat_json(
+            model=model,
+            instruction=instruction,
+            context=context,
+            base_url=settings.openai_next_base_url,
+            api_key=settings.openai_next_api_key,
+            missing_key_message="请先配置 OPENAI_NEXT_API_KEY",
+            image_paths=image_paths,
+        )
+
+    def tide_chat_json(
+        self, *, model: str, instruction: str, context: dict[str, Any], temperature: float | None = None,
+    ) -> dict[str, Any]:
+        """Run the weekly report through its isolated search/synthesis provider."""
+        return self._chat_json(
+            model=model,
+            instruction=instruction,
+            context=context,
+            base_url=settings.tide_api_base_url,
+            api_key=settings.tide_api_key,
+            missing_key_message="请先配置 TIDE_API_KEY",
+            temperature=temperature,
+        )
+
+    def _chat_json(
+        self, *, model: str, instruction: str, context: dict[str, Any], base_url: str,
+        api_key: str, missing_key_message: str, image_paths: list[str] | None = None,
+        temperature: float | None = 0.45,
+    ) -> dict[str, Any]:
         if not self.live:
             raise ProviderError("demo_mode", "演示模式未调用真实模型")
-        if not settings.openai_next_api_key:
-            raise ProviderError("provider_not_configured", "请先配置 OPENAI_NEXT_API_KEY")
+        if not api_key:
+            raise ProviderError("provider_not_configured", missing_key_message)
         user_text = f"{instruction}\n\n输入上下文：\n{json.dumps(context, ensure_ascii=False)}"
         user_content: str | list[dict[str, Any]] = user_text
         if image_paths:
@@ -127,19 +162,20 @@ class CreditsProvider:
                 encoded = base64.b64encode(path.read_bytes()).decode("ascii")
                 parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}", "detail": "low"}})
             user_content = parts
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
-            "temperature": 0.45,
             "messages": [
                 {"role": "system", "content": "你是严谨的贵州山地农产品品牌编辑。只输出合法 JSON，不虚构事实、来源或功效。"},
                 {"role": "user", "content": user_content},
             ],
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
-                    f"{settings.openai_next_base_url.rstrip('/')}/chat/completions",
-                    headers={"Authorization": f"Bearer {settings.openai_next_api_key}", "Content-Type": "application/json"},
+                    f"{base_url.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json=payload,
                 )
                 response.raise_for_status()
@@ -147,6 +183,12 @@ class CreditsProvider:
             raise ProviderError("provider_timeout", "模型请求超时，可重试") from exc
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
+            if status == 400:
+                raise ProviderError(
+                    "provider_bad_request",
+                    "模型请求无效或模型当前不可用，请检查模型名和网关配置",
+                    retriable=False,
+                ) from exc
             if status in {401, 403}:
                 raise ProviderError("provider_auth_failed", "模型 Key 无效或没有该模型权限", retriable=False) from exc
             if status in {402, 429}:
@@ -161,8 +203,8 @@ class CreditsProvider:
         return _json_from_content(str(content))
 
     def tide_search(self, context: dict[str, Any]) -> list[TideSource]:
-        result = self.chat_json(
-            model=settings.openai_next_tide_model,
+        result = self.tide_chat_json(
+            model=settings.tide_search_model,
             instruction=(
                 "联网检索与当前产品、产地、品牌路线相关的近期公开内容。返回 JSON："
                 '{"sources":[{"url":"https://...","title":"...","published_at":"YYYY-MM-DD 或 null",'
@@ -190,8 +232,8 @@ class CreditsProvider:
 
     def weekly_tide_candidates(self) -> list[WeeklyTideSource]:
         """Ask the live search model for public pages only; final filtering happens locally."""
-        result = self.chat_json(
-            model=settings.openai_next_tide_model,
+        result = self.tide_chat_json(
+            model=settings.tide_search_model,
             instruction=(
                 "联网检索近30天中国新消费与餐饮行业的公开内容。检索时覆盖并优先这些网站："
                 "红餐网(canyin88.com)、餐饮老板内参(watcn.com)、Foodaily(foodaily.com)、"
@@ -227,8 +269,8 @@ class CreditsProvider:
         return sources
 
     def weekly_tide_ideas(self, sources: list[dict[str, Any]], holidays: list[dict[str, str]]) -> list[WeeklyTideIdea]:
-        result = self.chat_json(
-            model=settings.openai_next_tide_model,
+        result = self.tide_chat_json(
+            model=settings.tide_synthesis_model,
             instruction=(
                 "基于已验链来源生成5到6条通用的餐饮/新消费创意灵感。"
                 "趋势只能作为创意角度，不能写成品牌、产品或功效事实；不得添加未在输入来源中出现的信息。"
@@ -238,6 +280,8 @@ class CreditsProvider:
                 "\"source_urls\":[\"https://...\"]}]}。"
             ),
             context={"verified_sources": sources, "upcoming_holidays": holidays},
+            # The platform's kimi-k3 gateway accepts only temperature=1.
+            temperature=1,
         )
         raw_ideas = result.get("ideas")
         if not isinstance(raw_ideas, list):
