@@ -88,6 +88,29 @@ def test_generation_preview_is_not_an_archive_record_until_saved(tmp_path: Path,
         assert len(client.get(f"/api/projects/{project_id}/workspace").json()["data"]["generation_jobs"]) == 1
 
 
+def test_generation_requires_active_archives_and_keeps_project_context_isolated(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "generation-scope.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    with TestClient(app) as client:
+        first_project_id, _ = _seed_confirmed_card(client)
+        second_project_id, _ = _seed_confirmed_card(client)
+        first_route = client.post(f"/api/projects/{first_project_id}/directions", json={}).json()["data"]["routes"][0]
+        second_route = client.post(f"/api/projects/{second_project_id}/directions", json={}).json()["data"]["routes"][0]
+        client.post(f"/api/directions/{first_route['id']}/select")
+        client.post(f"/api/directions/{second_route['id']}/select")
+
+        generated = client.post(f"/api/projects/{second_project_id}/generation-jobs", json={"template_type": "xiaohongshu"}).json()["data"]
+        assert generated["input_snapshot"]["project"]["id"] == second_project_id
+        assert {card["project_id"] for card in generated["input_snapshot"]["archive_cards"]} == {second_project_id}
+
+        first_card = client.get(f"/api/projects/{first_project_id}/workspace").json()["data"]["archive_cards"][0]
+        client.post(f"/api/archive-cards/{first_card['id']}/discard")
+        blocked = client.post(f"/api/projects/{first_project_id}/generation-jobs", json={"template_type": "peripheral"})
+        assert blocked.status_code == 422
+        assert blocked.json()["error"]["code"] == "archive_required"
+
+
 def test_project_directory_and_manual_keep_identity(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "manual.db"))
     monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))

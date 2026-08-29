@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     tide_api_key: str = ""
     tide_search_model: str = "sonar-medium-online"
     tide_synthesis_model: str = "kimi-k3"
+    tide_search_provider: str = "tavily"
+    tavily_api_key: str = ""
+    tavily_search_depth: str = "basic"
+    tavily_max_results_per_query: int = 3
+    tavily_country: str = "china"
+    tide_search_lookback_days: int = 30
     openai_next_image_base_url: str = "https://draw.openai-next.com/v1"
     openai_next_image_api_key: str = ""
     openai_next_image_model: str = "gpt-image-2"
@@ -62,7 +68,7 @@ class Settings(BaseSettings):
 
     @property
     def tide_configured(self) -> bool:
-        return bool(self.tide_api_key)
+        return bool(self.tide_api_key and self.tavily_api_key)
 
 
 @lru_cache

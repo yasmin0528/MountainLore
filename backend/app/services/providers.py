@@ -7,8 +7,10 @@ import json
 import mimetypes
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -52,6 +54,27 @@ class WeeklyTideIdea:
     source_urls: list[str]
 
 
+@dataclass(frozen=True)
+class TavilyWeeklyQuery:
+    domain: str
+    channel: str
+    publisher: str
+    query: str
+
+
+_TAVILY_WEEKLY_QUERIES = (
+    TavilyWeeklyQuery("canyin88.com", "industry", "红餐网", "近30天 中国 餐饮 新消费 热点 趋势 site:canyin88.com"),
+    TavilyWeeklyQuery("watcn.com", "industry", "餐饮老板内参", "近30天 中国 餐饮 新消费 热点 趋势 site:watcn.com"),
+    TavilyWeeklyQuery("foodaily.com", "industry", "Foodaily", "近30天 中国 食品饮料 新消费 热点 趋势 site:foodaily.com"),
+    TavilyWeeklyQuery("foodinc.com.cn", "industry", "小食代", "近30天 中国 食品饮料 新消费 热点 趋势 site:foodinc.com.cn"),
+    TavilyWeeklyQuery("tidesight.com", "industry", "观潮新消费", "近30天 中国 新消费 餐饮 热点 趋势 site:tidesight.com"),
+    TavilyWeeklyQuery("36kr.com", "industry", "36氪", "近30天 中国 餐饮 新消费 热点 趋势 site:36kr.com"),
+    TavilyWeeklyQuery("xiaohongshu.com", "xiaohongshu", "小红书公开帖", "近30天 餐饮 新消费 热议 公开帖子 site:xiaohongshu.com"),
+    TavilyWeeklyQuery("douyin.com", "douyin", "抖音公开趋势", "近30天 餐饮 新消费 热议 趋势 site:douyin.com"),
+)
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+
 def _json_from_content(content: str) -> dict[str, Any]:
     try:
         return json.loads(content)
@@ -63,6 +86,21 @@ def _json_from_content(content: str) -> dict[str, Any]:
             return json.loads(match.group())
         except json.JSONDecodeError as exc:
             raise ProviderError("invalid_model_json", "模型返回的结构化内容无法解析") from exc
+
+
+def _is_recent_or_unknown(published_at: object) -> bool:
+    """Known dates must be recent; unknown dates remain explicitly reviewable."""
+    if not published_at:
+        return True
+    match = re.search(r"(20\d{2})[-/](\d{1,2})[-/](\d{1,2})", str(published_at))
+    if not match:
+        return True
+    try:
+        published = datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)), tzinfo=_SHANGHAI)
+    except ValueError:
+        return True
+    current = datetime.now(_SHANGHAI)
+    return current - timedelta(days=settings.tide_search_lookback_days) <= published <= current
 
 
 class CreditsProvider:
@@ -84,7 +122,7 @@ class CreditsProvider:
                 "tide": {
                     "configured": tide_configured,
                     "model": settings.tide_synthesis_model,
-                    "search_model": settings.tide_search_model,
+                    "search_provider": settings.tide_search_provider,
                     "status": "configured" if tide_configured else "missing_key",
                 },
                 "image": {"configured": bool(settings.resolved_image_api_key), "model": settings.openai_next_image_model, "status": "unverified" if settings.resolved_image_api_key else "missing_key"},
@@ -231,42 +269,77 @@ class CreditsProvider:
         return sources
 
     def weekly_tide_candidates(self) -> list[WeeklyTideSource]:
-        """Ask the live search model for public pages only; final filtering happens locally."""
-        result = self.tide_chat_json(
-            model=settings.tide_search_model,
-            instruction=(
-                "联网检索近30天中国新消费与餐饮行业的公开内容。检索时覆盖并优先这些网站："
-                "红餐网(canyin88.com)、餐饮老板内参(watcn.com)、Foodaily(foodaily.com)、"
-                "小食代(foodinc.com.cn)、观潮新消费(tidesight.com)、36氪(36kr.com)，"
-                "并分别检索公开可访问的小红书帖子(xiaohongshu.com)与抖音趋势页(douyin.com)。"
-                "只返回真实、可公开打开的 HTTPS 原始页面，不得使用聚合转载、登录页或搜索结果页。"
-                "返回 JSON：{\"sources\":[{\"url\":\"https://...\",\"channel\":\"industry|xiaohongshu|douyin\","
-                "\"publisher\":\"...\",\"title\":\"...\",\"published_at\":\"YYYY-MM-DD 或 null\"}]}。"
-                f"最多返回 {settings.tide_source_max_results} 条，宁缺毋滥。"
-            ),
-            context={"task": "weekly_consumer_and_food_trend_scan"},
-        )
-        raw_sources = result.get("sources")
-        if not isinstance(raw_sources, list):
-            raise ProviderError("missing_citations", "联网模型没有返回可验证的周报来源")
+        """Collect candidate pages directly from Tavily; local verification is still mandatory."""
+        if not self.live:
+            raise ProviderError("demo_mode", "演示模式未调用真实联网检索")
+        if settings.tide_search_provider.lower() != "tavily":
+            raise ProviderError("tide_search_provider_unsupported", "当前仅支持 Tavily 作为观潮联网检索服务", retriable=False)
+        if not settings.tavily_api_key:
+            raise ProviderError("tavily_not_configured", "请先配置 TAVILY_API_KEY", retriable=False)
         sources: list[WeeklyTideSource] = []
-        for raw in raw_sources[: settings.tide_source_max_results]:
-            if not isinstance(raw, dict):
+        seen_urls: set[str] = set()
+        for search_query in _TAVILY_WEEKLY_QUERIES:
+            if len(sources) >= settings.tide_source_max_results:
+                break
+            result = self._tavily_search(search_query)
+            raw_sources = result.get("results")
+            if not isinstance(raw_sources, list):
                 continue
-            url = str(raw.get("url") or "")
-            channel = str(raw.get("channel") or "")
-            if not url.startswith("https://") or channel not in {"industry", "xiaohongshu", "douyin"}:
-                continue
-            sources.append(WeeklyTideSource(
-                url=url,
-                channel=channel,
-                publisher=str(raw.get("publisher") or "公开来源"),
-                title=str(raw.get("title") or "未命名来源"),
-                published_at=str(raw["published_at"]) if raw.get("published_at") else None,
-            ))
+            for raw in raw_sources:
+                if not isinstance(raw, dict):
+                    continue
+                url = str(raw.get("url") or "").strip()
+                published_at = raw.get("published_date")
+                if not url.startswith("https://") or url in seen_urls or not _is_recent_or_unknown(published_at):
+                    continue
+                seen_urls.add(url)
+                sources.append(WeeklyTideSource(
+                    url=url,
+                    channel=search_query.channel,
+                    publisher=search_query.publisher,
+                    title=str(raw.get("title") or "未命名来源").strip(),
+                    published_at=str(published_at) if published_at else None,
+                ))
+                if len(sources) >= settings.tide_source_max_results:
+                    break
         if not sources:
-            raise ProviderError("missing_citations", "联网模型没有返回可验证的周报来源")
+            raise ProviderError("tavily_no_results", "Tavily 没有返回可验证的周报来源")
         return sources
+
+    def _tavily_search(self, search_query: TavilyWeeklyQuery) -> dict[str, Any]:
+        payload = {
+            "api_key": settings.tavily_api_key,
+            "query": search_query.query,
+            "topic": "general",
+            "search_depth": settings.tavily_search_depth,
+            "max_results": settings.tavily_max_results_per_query,
+            "include_domains": [search_query.domain],
+            "country": settings.tavily_country,
+            "include_answer": False,
+            "include_raw_content": False,
+        }
+        try:
+            response = self._post_tavily(payload)
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise ProviderError("tavily_timeout", "Tavily 检索超时，可在下周自动重试") from exc
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {401, 403}:
+                raise ProviderError("tavily_auth_failed", "Tavily Key 无效或没有访问权限", retriable=False) from exc
+            if status in {402, 429}:
+                raise ProviderError("tavily_quota_or_rate_limited", "Tavily 免费额度不足或请求受限", retriable=False) from exc
+            raise ProviderError("tavily_unavailable", f"Tavily 返回 HTTP {status}") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError("tavily_unavailable", "Tavily 服务暂不可用") from exc
+        body = response.json()
+        if not isinstance(body, dict):
+            raise ProviderError("tavily_invalid_response", "Tavily 返回格式无效")
+        return body
+
+    def _post_tavily(self, payload: dict[str, Any]) -> httpx.Response:
+        with httpx.Client(timeout=self.timeout) as client:
+            return client.post("https://api.tavily.com/search", json=payload)
 
     def weekly_tide_ideas(self, sources: list[dict[str, Any]], holidays: list[dict[str, str]]) -> list[WeeklyTideIdea]:
         result = self.tide_chat_json(
