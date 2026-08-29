@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from binascii import Error as Base64Error
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.services.tide_report import (
 from app.services.workflow import create_manual_skeleton, create_task, execute_task, hash_share_token, project_snapshot, submit_task
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class CardPatch(BaseModel):
@@ -724,8 +726,43 @@ def persist_preview_image(
     return {"kind": "url", "value": f"/api/media/{asset_id}"}
 
 
-@router.post("/projects/{project_id}/generation-previews")
-def create_generation_preview(project_id: str, payload: GenerationPreviewCreate, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
+def run_generation_preview(preview_id: str) -> None:
+    """Generate outside the request/response lifecycle so reverse proxies do not time out."""
+    with connect() as connection:
+        preview = row_dict(connection.execute("SELECT * FROM generation_previews WHERE id = ?", (preview_id,)).fetchone())
+    if not preview or preview["status"] != "running":
+        return
+    context = json.loads(preview["input_snapshot_json"])
+    generation_input = context.get("launch_generation")
+    if not isinstance(generation_input, dict):
+        result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": "缺少生成输入快照"}, "failed", "generation_snapshot_invalid"
+    else:
+        try:
+            result = model_launch_copy(context, generation_input)
+            image = provider.generate_image(str(generation_input["image_prompt"]))
+            with connect() as connection:
+                result["image"] = persist_preview_image(connection, preview["project_id"], preview_id, image, str(generation_input["image_prompt"]))
+            status, error_code = "succeeded", None
+        except ProviderError as exc:
+            result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": str(exc)}, "failed", exc.code
+        except (Base64Error, OSError, ValueError) as exc:
+            result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": "图片保存失败，请重试"}, "failed", "image_storage_failed"
+            logger.warning("Generation preview %s could not persist its image: %s", preview_id, exc)
+        except Exception:
+            result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": "生成服务出现异常，请重试"}, "failed", "generation_internal_error"
+            logger.exception("Generation preview %s failed unexpectedly", preview_id)
+    with connect() as connection:
+        connection.execute(
+            "UPDATE generation_previews SET result_json = ?, status = ?, error_code = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+            (json_value(result), status, error_code, now(), preview_id),
+        )
+
+
+@router.post("/projects/{project_id}/generation-previews", status_code=202)
+def create_generation_preview(
+    project_id: str, payload: GenerationPreviewCreate, background_tasks: BackgroundTasks,
+    visitor: Annotated[dict[str, Any], Depends(current_visitor)],
+) -> dict[str, Any]:
     if payload.template_type not in {"peripheral", "xiaohongshu"}:
         fail(422, "仅支持周边概念稿或小红书图文", "invalid_template")
     material_ids = normalized_material_ids(payload.template_type, payload.material_ids)
@@ -739,24 +776,23 @@ def create_generation_preview(project_id: str, payload: GenerationPreviewCreate,
         preview_id = new_id()
         generation_input = launch_generation_input(context, payload.template_type, payload.inspiration_text, material_ids)
         context["launch_generation"] = generation_input
-        try:
-            result = model_launch_copy(context, generation_input)
-            prompt = generation_input["image_prompt"]
-            image = provider.generate_image(prompt)
-            result["image"] = persist_preview_image(connection, project_id, preview_id, image, prompt)
-            status, error_code = "succeeded", None
-        except ProviderError as exc:
-            status, error_code, result = "failed", exc.code, {"warning": "AI 概念稿，不可直接印刷"}
-        except (Base64Error, OSError, ValueError):
-            status, error_code, result = "failed", "image_storage_failed", {"warning": "AI 概念稿，不可直接印刷"}
         connection.execute(
             "INSERT INTO generation_previews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (preview_id, project_id, payload.template_type, payload.inspiration_text, json_value(context), json_value(result), status, error_code, now(), now()),
+            (preview_id, project_id, payload.template_type, payload.inspiration_text, json_value(context), json_value({"warning": "正在生成图文预览"}), "running", None, now(), now()),
         )
         preview = decode_record(row_dict(connection.execute("SELECT * FROM generation_previews WHERE id = ?", (preview_id,)).fetchone()))
-    if status == "failed":
-        fail(503, "生成预览未完成，可修改灵感后重试", error_code or "generation_failed")
+    background_tasks.add_task(run_generation_preview, preview_id)
     return envelope(preview)
+
+
+@router.get("/generation-previews/{preview_id}")
+def get_generation_preview(preview_id: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
+    with connect() as connection:
+        preview = row_dict(connection.execute("SELECT * FROM generation_previews WHERE id = ?", (preview_id,)).fetchone())
+    if not preview:
+        fail(404, "找不到这份生成预览", "preview_not_found")
+    project_for_visitor(preview["project_id"], visitor)
+    return envelope(decode_record(preview))
 
 
 @router.post("/generation-previews/{preview_id}/save")

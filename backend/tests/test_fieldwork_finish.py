@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from app.fieldwork.store import connect
 from app.main import app
 
 
@@ -58,3 +59,27 @@ def test_field_notes_keep_existing_candidate_flow(tmp_path: Path, monkeypatch) -
         assert candidates[0]["title"] == "品牌的来处"
         confirmed = client.post(f"/api/candidates/{candidates[0]['id']}/confirm").json()["data"]
         assert confirmed["archive_card"]["source_summary"] == "采风问答与图片来源"
+
+
+def test_terminal_state_is_detected_by_answer_count_even_without_finish_prompt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "ready-finish.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    with TestClient(app) as client:
+        _, session = create_project_and_session(client)
+        for _ in range(3):
+            response = client.post(
+                f"/api/sessions/{session['id']}/messages",
+                json={"content": "", "skipped": True, "media_asset_ids": []},
+            )
+            response.raise_for_status()
+
+        with connect() as connection:
+            connection.execute(
+                "INSERT INTO messages (id, session_id, role, content, sequence, created_at) VALUES (?, ?, 'assistant', '采风已足够，继续整理细节。', ?, ?)",
+                ("override-finish", session["id"], 99, "2026-08-29T10:00:00Z"),
+            )
+
+        project_response = client.get(f"/api/projects/{session['project_id']}")
+        project_response.raise_for_status()
+        assert project_response.json()["data"]["session"]["ready_to_finish"] is True

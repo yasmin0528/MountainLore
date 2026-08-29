@@ -337,6 +337,19 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); }
   }
 
+  async function restartFieldwork() {
+    if (!project) return;
+    setBusy(true); setError(null);
+    try {
+      if (demoMode) {
+        const demoSession = structuredClone(DEMO_FIELDWORK_SESSION);
+        setSession(demoSession); setScreen("interview"); setAnswer(""); setUploads([]); return;
+      }
+      const result = await api<{ data: { session: Session } }>(`/projects/${project.id}/fieldwork/restart`, { method: "POST", headers: { "Idempotency-Key": createRequestId("fieldwork-restart") } });
+      setSession(result.data.session); setScreen("interview"); setAnswer(""); setUploads([]); setCandidates([]);
+    } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); }
+  }
+
   async function resolveCandidate(candidate: Candidate, action: "confirm" | "discard") {
     try {
       const result = await api<{ data: { candidate: Candidate } }>(`/candidates/${candidate.id}/${action}`, { method: "POST", headers: { "Idempotency-Key": createRequestId("candidate") } });
@@ -378,6 +391,17 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     } catch (caught) { setError(errorText(caught)); }
     finally { setBusy(false); }
   }
+  async function waitForGenerationPreview(previewId: string): Promise<GenerationPreview> {
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      const response = await api<{ data: GenerationPreview }>(`/generation-previews/${previewId}`);
+      if (response.data.status === "succeeded") return response.data;
+      if (response.data.status === "failed") {
+        throw new Error(String(response.data.result.error_message ?? "图文预览生成失败，请修改提示词后重试。"));
+      }
+    }
+    throw new Error("图文预览仍在生成，请稍后重试。");
+  }
   async function previewLaunch() {
     if (!project || !launchWorkspace || project.id !== launchArchiveId) { setError("请先选择本次出山要使用的品牌档案。"); return; }
     if (!launchActiveCards.length) { setError("所选品牌档案还没有有效资料，请先确认入档材料。"); return; }
@@ -393,7 +417,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
         return;
       }
       const response = await api<{ data: GenerationPreview }>(`/projects/${project.id}/generation-previews`, { method: "POST", body: JSON.stringify({ template_type: launchType, inspiration_text: requestPrompt, inspiration_card_id: launchInspiration?.id, material_ids: materialIds }) });
-      setGenerationPreview(response.data);
+      setGenerationPreview(response.data.status === "succeeded" ? response.data : await waitForGenerationPreview(response.data.id));
     } catch (caught) { setError(errorText(caught)); }
     finally { setBusy(false); }
   }
@@ -460,7 +484,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       {screen === "manual" && workspace && <BrandManualResult key={workspace.manual?.current_version_id ?? workspace.project.status ?? "manual-setup"} workspace={workspace} logoTask={latestLogoTask} patternTask={latestPatternTask} exportTask={workspace.tasks?.find((item) => item.kind === "export")} demoMode={demoMode} busy={busy} onGenerate={createDirections} onSelect={selectDirection} onSave={saveManual} onRefresh={refreshWorkspace} onRetry={retryTask} onGenerateAsset={generateManualAsset} onFailure={setError} onOpenArchive={() => setScreen("archive")} onNext={() => setScreen("tide")} />}
       {screen === "tide" && workspace && <Tide report={tideReport} demoMode={demoMode} busy={busy} onRefresh={refreshTideReport} onFavorite={favoriteTideIdea} onUse={useTideIdea} onNext={() => setScreen("launch")} />}
       {screen === "launch" && workspace && <Launch workspace={launchWorkspace ?? undefined} projects={projectDirectory} inspiration={launchWorkspace ? launchInspiration ?? undefined : undefined} busy={busy} prompt={launchPrompt} type={launchType} preview={generationPreview} canGenerate={launchGenerationReady} selectedMaterials={selectedLaunchMaterials} visualAssetCount={launchVisualAssetCount} pickerOpen={launchArchivePickerOpen} materialPickerOpen={launchMaterialPickerOpen} onPromptChange={setLaunchPrompt} onTypeChange={setLaunchType} onOpenPicker={() => setLaunchArchivePickerOpen(true)} onClosePicker={() => setLaunchArchivePickerOpen(false)} onOpenMaterialPicker={() => setLaunchMaterialPickerOpen(true)} onCloseMaterialPicker={() => setLaunchMaterialPickerOpen(false)} onToggleMaterial={(id) => setLaunchMaterialIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])} onSelectArchive={selectLaunchArchive} onPreview={previewLaunch} onSavePreview={saveLaunchPreview} onClosePreview={() => setGenerationPreview(null)} onOpenRecords={() => setScreen("assets")} />}
-      {archiveModal === "cards" && workspace && <ArchiveFolioDialog project={workspace.project} cards={workspace.archive_cards} busy={busy} onClose={() => setArchiveModal(null)} onSave={saveCard} />}
+      {archiveModal === "cards" && workspace && <ArchiveFolioDialog project={workspace.project} cards={workspace.archive_cards} busy={busy} onClose={() => setArchiveModal(null)} onSave={saveCard} onRestartFieldwork={() => { setArchiveModal(null); void restartFieldwork(); }} />}
       {directionDraft && workspace && <DirectionDraftDialog project={workspace.project} direction={directionDraft} busy={busy} onClose={() => setDirectionDraft(null)} onConfirm={async () => { if (await selectDirection(directionDraft.id)) setDirectionDraft(null); }} />}
 
       {authOpen && <AuthDialog busy={busy} onClose={() => setAuthOpen(false)} onSubmit={authenticate} />}
@@ -507,7 +531,8 @@ function Setup({ form, setForm, busy, onSubmit, onDemo }: { form: SetupForm; set
 
 function Interview({ project, session, answer, setAnswer, uploads, busy, onFiles, onSend, onFinish }: { project: Project; session: Session; answer: string; setAnswer: (value: string) => void; uploads: Array<{ id: string; file: File; status: string; error?: string }>; busy: boolean; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onSend: (skip?: boolean) => void; onFinish: () => void }) {
   const readyToFinish = Boolean(session.ready_to_finish);
-  return <><header className="interview-header"><div><p className="eyebrow">FIELD INTERVIEW</p><h1>{project.core_product}</h1><p>{project.origin} · 已自动保存</p></div></header><div className="interview-layout"><section className="transcript"><div className="transcript-head"><div><p className="eyebrow">对话记录</p><h2>从真实经历开始</h2></div><span>{session.field_notes.length} 条笔记</span></div><div className="transcript-list">{session.messages.map((message, index) => { const isFinishPrompt = readyToFinish && message.role === "assistant" && index === session.messages.length - 1; return <article className={`turn turn-${message.role}`} key={message.id}><p className="turn-meta">{message.role === "assistant" ? "调查员" : message.role === "user" ? "受访者" : "系统"}</p><p>{message.content}</p>{isFinishPrompt && <div className="turn-finish-action"><button className="primary-button" onClick={onFinish} disabled={busy}>结束本次采风</button></div>}</article>; })}</div><section className="composer">{readyToFinish && <p className="composer-complete" role="status">本轮采风已收束。</p>}<label htmlFor="fieldwork-answer">你的回答 <small>一次只需说一件真实的事</small></label><textarea id="fieldwork-answer" value={answer} maxLength={2000} disabled={readyToFinish} onChange={(event) => setAnswer(event.target.value)} placeholder="可以从一个人、一件事，或一个产品细节开始。" /><div className="composer-footer"><div><label className="upload-button"><input type="file" accept="image/*" multiple disabled={readyToFinish} onChange={onFiles} />添加照片</label><span>{answer.length} / 2,000</span></div><div><button className="text-button" onClick={() => onSend(true)} disabled={busy || readyToFinish}>跳过</button><button className="primary-button" onClick={() => onSend()} disabled={busy || readyToFinish}>{busy ? "正在整理…" : "记录并继续"}</button></div></div>{uploads.map((item) => <div className="upload-item" key={item.id}><span>{item.file.name}<small>{item.status === "ready" ? "已保存" : item.status === "failed" ? item.error : "正在上传"}</small></span></div>)}</section></section><aside className="notes-panel"><header><p className="eyebrow">FIELD NOTES</p><h2>本次采风笔记</h2></header>{session.field_notes.length ? <div className="note-stack">{session.field_notes.map((note) => <article className="sticky-note" key={note.id}><p>FIELD NOTE {String(note.sequence).padStart(2, "0")}</p><h3>{note.title}</h3><p>{note.summary}</p><small>待确认</small></article>)}</div> : <p className="notes-empty">第一张笔记会在这里出现。</p>}</aside></div></>;
+  const showFinishAction = readyToFinish && session.status === "active";
+  return <><header className="interview-header"><div><p className="eyebrow">FIELD INTERVIEW</p><h1>{project.core_product}</h1><p>{project.origin} · 已自动保存</p></div></header><div className="interview-layout"><section className="transcript"><div className="transcript-head"><div><p className="eyebrow">对话记录</p><h2>从真实经历开始</h2></div><span>{session.field_notes.length} 条笔记</span></div><div className="transcript-list">{session.messages.map((message, index) => { const isFinishPrompt = showFinishAction && message.role === "assistant" && index === session.messages.length - 1; return <article className={`turn turn-${message.role}`} key={message.id}><p className="turn-meta">{message.role === "assistant" ? "调查员" : message.role === "user" ? "受访者" : "系统"}</p><p>{message.content}</p>{isFinishPrompt && <div className="turn-finish-action"><button className="primary-button" onClick={onFinish} disabled={busy}>结束本次采风</button></div>}</article>; })}{showFinishAction && <div className="turn-finish-action" style={{ marginTop: "0.75rem" }}><button className="primary-button" onClick={onFinish} disabled={busy}>结束本次采风</button></div>}</div><section className="composer">{readyToFinish && <p className="composer-complete" role="status">本轮采风已收束。</p>}<label htmlFor="fieldwork-answer">你的回答 <small>一次只需说一件真实的事</small></label><textarea id="fieldwork-answer" value={answer} maxLength={2000} disabled={readyToFinish} onChange={(event) => setAnswer(event.target.value)} placeholder="可以从一个人、一件事，或一个产品细节开始。" /><div className="composer-footer"><div><label className="upload-button"><input type="file" accept="image/*" multiple disabled={readyToFinish} onChange={onFiles} />添加照片</label><span>{answer.length} / 2,000</span></div><div><button className="text-button" onClick={() => onSend(true)} disabled={busy || readyToFinish}>跳过</button><button className="primary-button" onClick={() => onSend()} disabled={busy || readyToFinish}>{busy ? "正在整理…" : "记录并继续"}</button></div></div>{uploads.map((item) => <div className="upload-item" key={item.id}><span>{item.file.name}<small>{item.status === "ready" ? "已保存" : item.status === "failed" ? item.error : "正在上传"}</small></span></div>)}</section></section><aside className="notes-panel"><header><p className="eyebrow">FIELD NOTES</p><h2>本次采风笔记</h2></header>{session.field_notes.length ? <div className="note-stack">{session.field_notes.map((note) => <article className="sticky-note" key={note.id}><p>FIELD NOTE {String(note.sequence).padStart(2, "0")}</p><h3>{note.title}</h3><p>{note.summary}</p><small>待确认</small></article>)}</div> : <p className="notes-empty">第一张笔记会在这里出现。</p>}</aside></div></>;
 }
 
 function Candidates({ candidates, confirmed, busy, onResolve, onContinue }: { candidates: Candidate[]; confirmed: number; busy: boolean; onResolve: (item: Candidate, action: "confirm" | "discard") => void; onContinue: () => void }) { const pending = candidates.some((item) => item.status === "pending"); return <section className="candidate-page"><header className="page-header compact"><p className="eyebrow">采风完成 / 候选确认</p><h1>由你决定哪些材料进入档案</h1><p>AI 整理结果不是事实，确认前请核对原始访谈。</p></header><div className="candidate-grid">{candidates.map((item, index) => <article className="candidate-card" key={item.id}><p className="eyebrow">{item.type} / {String(index + 1).padStart(2, "0")}</p><h2>{item.title}</h2><p>{item.content}</p><footer>{item.status === "pending" ? <><button className="secondary-button" onClick={() => onResolve(item, "discard")}>弃用</button><button className="primary-button" onClick={() => onResolve(item, "confirm")}>确认入档</button></> : <span className={`status ${item.status}`}>{item.status === "confirmed" ? "已确认" : "已弃用"}</span>}</footer></article>)}</div><footer className="candidate-footer"><p>{pending ? "请先处理完每一张候选卡。" : confirmed ? `已有 ${confirmed} 条材料，将归入品牌档案后进入定调。` : "至少确认一张材料后才能编志。"}</p><button className="primary-button" disabled={!confirmed || pending || busy} onClick={onContinue}>{busy ? "正在确认…" : "确认编志并定调"}</button></footer></section>; }

@@ -43,12 +43,16 @@ def test_workbench_direction_discard_and_launch_snapshot(tmp_path: Path, monkeyp
         assert len(directions) == 3
         workspace_routes = client.get(f"/api/projects/{project_id}/workspace").json()["data"]["directions"]
         assert workspace_routes[0]["content_json"]["brand_one_liner"]
+        assert all(route["content_json"]["slogan"] != route["content_json"]["brand_one_liner"] for route in workspace_routes)
+        assert len({tuple(route["content_json"]["color_palette"]) for route in workspace_routes}) == 3
         assert workspace_routes[0]["content_json"]["visual_preferences"] == preferences
         assert {point["category"] for point in workspace_routes[0]["content_json"]["selling_points"]}.issubset({"产品创新", "创新活动策划"})
         selected = client.post(f"/api/directions/{directions[0]['id']}/select").json()["data"]
         assert selected["state"] == "current"
         assert selected["task"] is None
         assert selected["manual"]["content"]["logo_design"]
+        assert selected["manual"]["content"]["slogan"] != selected["manual"]["content"]["brand_one_liner"]
+        assert selected["manual"]["content"]["color_palette"] == workspace_routes[0]["content_json"]["color_palette"]
         manual_workspace = client.get(f"/api/projects/{project_id}/workspace").json()["data"]
         assert manual_workspace["manual_versions"][0]["status"] == "text_ready"
         assert not [task for task in manual_workspace["tasks"] if task["kind"] in {"manual_generation", "logo_generation", "export"}]
@@ -139,13 +143,18 @@ def test_generation_preview_rejects_non_object_model_json_without_a_500(tmp_path
         project_id, _ = _seed_confirmed_card(client)
         route = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"][0]
         client.post(f"/api/directions/{route['id']}/select")
-        monkeypatch.setattr(workbench_routes.provider, "chat_json", lambda **_kwargs: [])
+        def invalid_model_json(**_kwargs: object) -> dict[str, object]:
+            raise ProviderError("invalid_model_json", "模型返回的结构化内容必须是 JSON 对象")
+
+        monkeypatch.setattr(workbench_routes.provider, "chat_json", invalid_model_json)
         response = client.post(
             f"/api/projects/{project_id}/generation-previews",
-            json={"template_type": "peripheral", "inspiration_text": "山地果实的晨间能量"},
+            json={"template_type": "peripheral", "inspiration_text": "山地果实的晨间能量", "material_ids": ["sticker"]},
         )
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "invalid_model_json"
+        completed = client.get(f"/api/generation-previews/{response.json()['data']['id']}")
+    assert response.status_code == 202
+    assert completed.json()["data"]["status"] == "failed"
+    assert completed.json()["data"]["error_code"] == "invalid_model_json"
 
 
 def test_generation_preview_persists_base64_image_as_authenticated_media(tmp_path: Path, monkeypatch) -> None:
@@ -160,10 +169,12 @@ def test_generation_preview_persists_base64_image_as_authenticated_media(tmp_pat
         monkeypatch.setattr(workbench_routes.provider, "generate_image", lambda _prompt: {"kind": "base64", "value": "aW1hZ2UtYnl0ZXM="})
         preview = client.post(
             f"/api/projects/{project_id}/generation-previews",
-            json={"template_type": "peripheral", "inspiration_text": "山地果实的晨间能量"},
+            json={"template_type": "peripheral", "inspiration_text": "山地果实的晨间能量", "material_ids": ["sticker"]},
         )
-        assert preview.status_code == 200
-        image_url = preview.json()["data"]["result"]["image"]["value"]
+        assert preview.status_code == 202
+        completed = client.get(f"/api/generation-previews/{preview.json()['data']['id']}").json()["data"]
+        assert completed["status"] == "succeeded"
+        image_url = completed["result"]["image"]["value"]
         image = client.get(image_url)
     assert image.status_code == 200
     assert image.content == b"image-bytes"

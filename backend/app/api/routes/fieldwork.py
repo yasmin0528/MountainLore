@@ -259,7 +259,9 @@ def session_payload(session: dict[str, Any]) -> dict[str, Any]:
         notes = [decode_record(dict(row)) for row in connection.execute(
             "SELECT * FROM field_notes WHERE session_id = ? ORDER BY sequence", (session["id"],)
         )]
-    ready_to_finish = bool(messages) and messages[-1]["role"] == "assistant" and session["status"] == "active" and "结束本次采风" in messages[-1]["content"]
+    user_count = sum(1 for message in messages if message["role"] == "user")
+    finish_prompt_seen = any(message["role"] == "assistant" and "结束本次采风" in str(message.get("content") or "") for message in messages)
+    ready_to_finish = session["status"] == "active" and (user_count >= 3 or finish_prompt_seen)
     return {**session, "messages": messages, "field_notes": notes, "ready_to_finish": ready_to_finish}
 
 
@@ -488,7 +490,7 @@ def create_message(
         completed_answers = connection.execute(
             "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'", (session_id,)
         ).fetchone()[0]
-        if completed_answers >= 3:
+        if completed_answers >= 4:
             fail(409, "本轮采风已经收束，请结束本次采风并确认候选档案", "fieldwork_ready_to_finish")
         if idempotency_key:
             task = row_dict(connection.execute("SELECT * FROM tasks WHERE idempotency_key = ?", (idempotency_key,)).fetchone())
@@ -581,6 +583,28 @@ def create_message(
                VALUES (:id, :project_id, :kind, :status, :result_json, :error_code, :idempotency_key, :created_at,
                        :updated_at, :input_snapshot_json, :progress, :attempt, :retriable, :parent_task_id)""", task)
     return envelope({"task": decode_record(task), "session": session_payload(session)})
+
+
+@router.post("/projects/{project_id}/fieldwork/restart")
+def restart_fieldwork(
+    project_id: str,
+    visitor: Annotated[dict[str, Any], Depends(current_visitor)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> dict[str, Any]:
+    project = project_for_visitor(project_id, visitor)
+    with connect() as connection:
+        existing = row_dict(connection.execute("SELECT * FROM sessions WHERE project_id = ? ORDER BY started_at DESC LIMIT 1", (project_id,)).fetchone())
+        if existing and existing["status"] == "active":
+            return envelope({"session": session_payload(existing)})
+        if existing:
+            connection.execute("DELETE FROM field_notes WHERE session_id = ?", (existing["id"],))
+            connection.execute("DELETE FROM messages WHERE session_id = ?", (existing["id"],))
+            connection.execute("DELETE FROM sessions WHERE id = ?", (existing["id"],))
+        session = {"id": new_id(), "project_id": project_id, "sequence": 1, "status": "active", "started_at": now(), "ended_at": None}
+        connection.execute("INSERT INTO sessions VALUES (:id, :project_id, :sequence, :status, :started_at, :ended_at)", session)
+        add_message(connection, session["id"], "assistant", OPENING_QUESTION)
+        connection.execute("UPDATE projects SET status = 'active', current_stage = 'fieldwork', updated_at = ? WHERE id = ?", (now(), project_id))
+    return envelope({"session": session_payload(session)})
 
 
 @router.post("/sessions/{session_id}/finish")

@@ -21,6 +21,23 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mountainlore-w
 _running: set[str] = set()
 _running_lock = threading.Lock()
 
+_ROUTE_COLOR_SCHEMES = [
+    (["#294A62", "#D8B56A", "#F4E9D2", "#6F7D58"], "以产地的晨雾、纸本记录和作物成熟色建立克制的田野档案感。"),
+    (["#2E5B46", "#D99A30", "#F6F1E5", "#495866"], "从产品的自然色泽和当代使用场景提炼低饱和主色，以明亮强调色承接创新感。"),
+    (["#A9443D", "#37634D", "#F3D6A7", "#403D38"], "从活动现场、产品切面和手作材料中提炼高辨识对比色，突出共同参与的能量。"),
+]
+
+
+def _fallback_slogan(project: dict[str, Any], route_index: int) -> str:
+    product = str(project.get("core_product") or "风物")
+    slogans = [f"一口{product}，见山见真", f"今天，就来点{product}", f"一起，让{product}被看见"]
+    return slogans[(route_index - 1) % len(slogans)]
+
+
+def _valid_palette(value: Any) -> list[str]:
+    colors = [str(item).upper() for item in value] if isinstance(value, list) else []
+    return colors if len(colors) == 4 and len(set(colors)) == 4 and all(len(color) == 7 and color.startswith("#") and all(char in "0123456789ABCDEF" for char in color[1:]) for color in colors) else []
+
 
 def public_claims(connection: Any, project_id: str) -> list[dict[str, Any]]:
     return [
@@ -191,7 +208,8 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {
             "title": "路线一｜山里来信", "candidate_brand_name": project["brand_name"],
-            "brand_one_liner": f"把{project['origin']}的日常，装进一份可追溯的{project['core_product']}。",
+            "brand_one_liner": f"以可追溯的{project['core_product']}连接{project['origin']}的真实劳动，让日常选择看得见来处、尝得到风物。",
+            "slogan": _fallback_slogan(project, 1),
             "target_audience": "重视来处、日常食用与真实关系的城市消费者",
             "target_scenarios": ["日常自用", "拜访伴手礼", "地方风物分享"],
             "story_spine": "从一个具体的人与一段制作现场出发，让品牌像田野笔记一样可信、克制。",
@@ -201,6 +219,7 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 for i in range(3)
             ],
             "evidenceGaps": evidence_gaps, "visual_keywords": ["田野手记", "暖纸", "靛蓝", "手绘标注"],
+            "color_palette": _ROUTE_COLOR_SCHEMES[0][0], "color_rationale": _ROUTE_COLOR_SCHEMES[0][1],
             "logo_design": "以一枚从山路与果实轮廓中提炼的手绘印记为核心：外轮廓像展开的田野记录页，中间保留一条向上的山路留白。采用靛蓝单色为主、暖纸为底，小尺寸仍清晰；不使用文字、渐变或复杂徽章。",
             "positive_prompt": "无文字品牌符号，贵州山地田野记录感，克制手绘，单色轮廓，适合小尺寸",
             "negative_prompt": "文字，渐变，玻璃拟态，旅游海报，疗效承诺，复杂徽章",
@@ -208,7 +227,8 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         },
         {
             "title": "路线二｜山地新日常", "candidate_brand_name": project["brand_name"],
-            "brand_one_liner": f"让{project['core_product']}从产地经验走进今天的生活。",
+            "brand_one_liner": f"让{project['core_product']}以清楚、轻快的当代方式进入日常，把产地经验转化为易理解、愿复用的新选择。",
+            "slogan": _fallback_slogan(project, 2),
             "target_audience": "偏好当代设计、轻负担表达与地方新消费的年轻人",
             "target_scenarios": ["工作间隙", "朋友分享", "节气礼赠"],
             "story_spine": "以真实产品与工艺为底，把地方经验翻译成简洁、可持续使用的现代视觉语言。",
@@ -218,6 +238,7 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 for i in range(3)
             ],
             "evidenceGaps": evidence_gaps, "visual_keywords": ["现代标本", "苔藓绿", "明黄索引", "留白"],
+            "color_palette": _ROUTE_COLOR_SCHEMES[1][0], "color_rationale": _ROUTE_COLOR_SCHEMES[1][1],
             "logo_design": "以产品切面与山地等高线组合成现代标本符号：使用几何圆角与一条明黄索引线，形成可被缩小为 App 图标的稳定结构。主色为苔藓绿，辅以明黄；整体留白、无文字、无写实插画。",
             "positive_prompt": "无文字品牌符号，山地农作物抽象标本，现代编辑设计，几何留白，小尺寸清晰",
             "negative_prompt": "文字，霓虹，渐变，玻璃拟态，旅游纪念品，写实风景照片",
@@ -225,7 +246,8 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         },
         {
             "title": "路线三｜风物共创场", "candidate_brand_name": project["brand_name"],
-            "brand_one_liner": f"围绕{project['core_product']}，让{project['origin']}的风物在共同参与中被看见。",
+            "brand_one_liner": f"围绕{project['core_product']}发起真实可参与的风物体验，让{project['origin']}的地方故事被共同创造、持续分享。",
+            "slogan": _fallback_slogan(project, 3),
             "target_audience": "愿意参与地方文化体验、品牌活动与内容共创的人群",
             "target_scenarios": ["产地开放日", "节气共创活动", "品牌联名与社群分享"],
             "story_spine": "把真实产地材料变成可参与的活动线索，让品牌不只讲述地方，也邀请人们一起留下新故事。",
@@ -235,6 +257,7 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 for i in range(3)
             ],
             "evidenceGaps": evidence_gaps, "visual_keywords": ["活动路标", "朱砂红", "山地绿", "手作拼贴"],
+            "color_palette": _ROUTE_COLOR_SCHEMES[2][0], "color_rationale": _ROUTE_COLOR_SCHEMES[2][1],
             "logo_design": "以一枚可被参与者盖印、拼接的活动路标为核心：山形、对话框与种子颗粒形成开放的三角构图。主色为山地绿与朱砂红，边缘保留手作切纸感；不出现文字，避免旅游海报式图案。",
             "positive_prompt": "无文字品牌符号，地方风物共创活动感，手作拼贴，清晰轮廓，小尺寸可识别",
             "negative_prompt": "文字，渐变，玻璃拟态，旅游宣传画，舞台灯光，复杂徽章",
@@ -249,6 +272,7 @@ def _validate_routes(raw: Any, snapshot: dict[str, Any]) -> list[dict[str, Any]]
         raise ProviderError("invalid_route_count", "品牌方案必须恰好返回三版")
     allowed = {claim["id"] for claim in snapshot["claims"]}
     validated: list[dict[str, Any]] = []
+    used_palettes: set[tuple[str, ...]] = set()
     for index, route in enumerate(routes, start=1):
         if not isinstance(route, dict):
             raise ProviderError("invalid_model_json", "品牌方案结构不完整")
@@ -269,7 +293,16 @@ def _validate_routes(raw: Any, snapshot: dict[str, Any]) -> list[dict[str, Any]]
             category = "创新活动策划" if len(normalized_points) == 2 else "产品创新"
             normalized_points.append({"category": category, "explanation": "待补充并核验的卖点", "text": "待补充并核验的卖点", "claimIds": [], "evidenceStatus": "gap"})
         logo_design = str(route.get("logo_design") or route.get("positive_prompt") or "以无文字核心图形建立品牌识别，保证小尺寸清晰可辨。")
-        route.update({"title": str(route.get("title") or f"路线 {index}"), "selling_points": normalized_points, "evidenceGaps": list(dict.fromkeys(gaps)), "logo_design": logo_design, "visual_preferences": snapshot.get("visual_preferences", {})})
+        one_liner = str(route.get("brand_one_liner") or "").strip()
+        slogan = str(route.get("slogan") or "").strip()
+        if not slogan or slogan == one_liner:
+            slogan = _fallback_slogan(snapshot["project"], index)
+        default_palette, default_rationale = _ROUTE_COLOR_SCHEMES[index - 1]
+        palette = _valid_palette(route.get("color_palette")) or list(default_palette)
+        if tuple(palette) in used_palettes:
+            palette = list(default_palette)
+        used_palettes.add(tuple(palette))
+        route.update({"title": str(route.get("title") or f"路线 {index}"), "brand_one_liner": one_liner, "slogan": slogan, "selling_points": normalized_points, "evidenceGaps": list(dict.fromkeys(gaps)), "color_palette": palette, "color_rationale": str(route.get("color_rationale") or default_rationale), "logo_design": logo_design, "visual_preferences": snapshot.get("visual_preferences", {})})
         validated.append(route)
     return validated
 
@@ -282,9 +315,11 @@ def _generate_routes(task: dict[str, Any]) -> dict[str, Any]:
             model=settings.openai_next_text_model,
             instruction=(
                 "基于冻结的项目、可公开事实与visual_preferences，生成恰好三版、受众/场景/叙事与视觉都明显不同的品牌初步方案。只输出 JSON 对象 {routes:[...]}。"
-                "每版必须含 title,candidate_brand_name,brand_one_liner,target_audience,target_scenarios,story_spine,"
+                "每版必须含 title,candidate_brand_name,brand_one_liner,slogan,target_audience,target_scenarios,story_spine,"
                 "emotion_value,altruistic_value,selling_points(恰好3项，每项含category、explanation、text和claimIds；category只能是产品创新或创新活动策划),evidenceGaps,"
-                "visual_keywords,logo_design,positive_prompt,negative_prompt,content_tone,forbidden_expressions。"
+                "visual_keywords,color_palette(恰好4个HEX色值),color_rationale,logo_design,positive_prompt,negative_prompt,content_tone,forbidden_expressions。"
+                "brand_one_liner 必须是一句完整介绍，同时体现品牌核心价值观和两项关键亮点；slogan 必须朗朗上口、易传播且有号召力，且不得与 brand_one_liner 相同或改写成同一句。"
+                "三版 color_palette 必须显著不同，并结合特色产品、原料、产地线索或已上传 Logo 提炼；color_rationale 要说明对应关系，不能沿用通用默认色板。"
                 "logo_design 必须是一段具体的无文字 Logo 设计说明，写清核心符号、构图、色彩或质感、小尺寸使用原则和明确避免项；三版的 Logo 方案必须显著不同。"
                 "claimIds只能使用输入 claims 的 id；无依据的表达不得伪装成事实，必须留空claimIds并写入evidenceGaps。"
             ),
@@ -327,7 +362,7 @@ def _fallback_manual(snapshot: dict[str, Any]) -> dict[str, Any]:
     scenarios = route.get("target_scenarios", [])
     return {
         "brand_name": route.get("candidate_brand_name") or project["brand_name"],
-        "brand_introduction": route.get("story_spine", ""), "slogan": route.get("brand_one_liner", ""),
+        "brand_introduction": route.get("story_spine", ""), "slogan": route.get("slogan") or _fallback_slogan(project, 1),
         "brand_strategy": {"audience": route.get("target_audience", ""), "scenarios": route.get("target_scenarios", []), "emotion": route.get("emotion_value", ""), "altruism": route.get("altruistic_value", "")},
         "story_system": {"main_story": route.get("story_spine", ""), "chapters": ["来处", "人物", "工艺", "今天的使用方式"]},
         "voice": {"do": route.get("content_tone", ""), "dont": route.get("forbidden_expressions", [])},
@@ -338,7 +373,8 @@ def _fallback_manual(snapshot: dict[str, Any]) -> dict[str, Any]:
         "story_spine": route.get("story_spine", ""),
         "font_family": preferences.get("font_family", "Source Han Serif SC"),
         "font_label": preferences.get("font_label", "思源宋体 / 思源黑体"),
-        "color_palette": preferences.get("palette") or ["#18372B", "#2B6173", "#D5A72B", "#F7F1E3"],
+        "color_palette": (_valid_palette(preferences.get("palette")) if preferences.get("logo_media_asset_id") else []) or _valid_palette(route.get("color_palette")) or list(_ROUTE_COLOR_SCHEMES[0][0]),
+        "color_rationale": route.get("color_rationale", "待补充色彩提炼依据。"),
         "logo_mode": preferences.get("logo_mode", "ai"),
         "logo_media_asset_id": preferences.get("logo_media_asset_id"),
         "logo_design": route.get("logo_design", "无文字图形，优先保证24px辨识度"),
