@@ -184,6 +184,12 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
   .route-evidence-list summary small{float:none;display:block;margin-top:4px}.launch-prompt-templates>div{display:grid;grid-template-columns:none!important;grid-auto-columns:minmax(150px,78%);grid-auto-flow:column;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x proximity}.launch-prompt-template{scroll-snap-align:start}
   .workflow-task{padding:16px}.capability-strip{grid-template-columns:1fr 1fr}.demo-banner{margin-top:0}.form-error{overflow-wrap:anywhere}.failure-toast{max-width:calc(100vw - 32px)}
 }
+/* 观潮私人周报：刷新状态始终与当前可读周报并列，失败不覆盖内容。 */
+.tide-refresh-panel{display:flex;align-items:center;justify-content:space-between;gap:24px;margin:18px 0 26px;padding:18px 20px;border:1px solid var(--border-soft);border-left:4px solid var(--indigo);background:var(--paper-high)}
+.tide-refresh-panel>div{display:grid;gap:5px;min-width:0}.tide-refresh-panel strong{color:var(--ink);font-size:14px;line-height:1.6}.tide-refresh-panel small{color:var(--muted);font-size:11px}.tide-refresh-panel.running{border-left-color:var(--ochre);background:color-mix(in srgb,var(--ochre-soft,#f4e8bf) 45%,var(--paper-high))}.tide-refresh-panel.failed{border-left-color:#a95d4f}.tide-refresh-panel.succeeded,.tide-refresh-panel.partial{border-left-color:var(--moss)}
+.tide-refresh-button{flex:0 0 auto;min-width:148px}.tide-ledger{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.tide-ledger span{display:block;padding:10px 12px;border:1px solid var(--border-soft);color:var(--muted);font-size:11px;text-align:center}.tide-ledger span.is-active{border-color:var(--ochre);background:var(--ochre-soft,#f4e8bf);color:var(--ink);font-weight:700}.tide-ledger span.is-done{border-color:var(--moss);background:var(--moss-soft);color:var(--moss-deep)}
+@media(max-width:760px){.tide-refresh-panel{align-items:stretch;flex-direction:column;gap:13px;padding:16px}.tide-refresh-button{width:100%}.tide-ledger{grid-template-columns:repeat(2,minmax(0,1fr))}.tide-ledger span{text-align:left}}
+
 @media (prefers-reduced-motion:reduce){
   .sidebar,.sidebar .stage,.primary-button,.secondary-button,.text-button,.upload-button{transition:none!important}
 }

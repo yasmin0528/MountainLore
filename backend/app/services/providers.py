@@ -65,16 +65,17 @@ class TavilyWeeklyQuery:
 
 
 _TAVILY_WEEKLY_QUERIES = (
-    TavilyWeeklyQuery("canyin88.com", "industry", "红餐网", "近30天 中国 餐饮 新消费 热点 趋势 site:canyin88.com"),
-    TavilyWeeklyQuery("watcn.com", "industry", "餐饮老板内参", "近30天 中国 餐饮 新消费 热点 趋势 site:watcn.com"),
-    TavilyWeeklyQuery("foodaily.com", "industry", "Foodaily", "近30天 中国 食品饮料 新消费 热点 趋势 site:foodaily.com"),
-    TavilyWeeklyQuery("foodinc.com.cn", "industry", "小食代", "近30天 中国 食品饮料 新消费 热点 趋势 site:foodinc.com.cn"),
-    TavilyWeeklyQuery("tidesight.com", "industry", "观潮新消费", "近30天 中国 新消费 餐饮 热点 趋势 site:tidesight.com"),
-    TavilyWeeklyQuery("36kr.com", "industry", "36氪", "近30天 中国 餐饮 新消费 热点 趋势 site:36kr.com"),
-    TavilyWeeklyQuery("xiaohongshu.com", "xiaohongshu", "小红书公开帖", "近30天 餐饮 新消费 热议 公开帖子 site:xiaohongshu.com"),
-    TavilyWeeklyQuery("douyin.com", "douyin", "抖音公开趋势", "近30天 餐饮 新消费 热议 趋势 site:douyin.com"),
+    TavilyWeeklyQuery("canyin88.com", "industry", "红餐网", "近7天 中国 地方食材 农产品 供应链 风味 site:canyin88.com"),
+    TavilyWeeklyQuery("watcn.com", "industry", "餐饮老板内参", "近7天 中国 地方食材 农产品 产地 品牌 site:watcn.com"),
+    TavilyWeeklyQuery("foodaily.com", "industry", "Foodaily", "近7天 中国 山地农产品 地方风味 食品饮料 site:foodaily.com"),
+    TavilyWeeklyQuery("foodinc.com.cn", "industry", "小食代", "近7天 中国 农产品 原产地 食品饮料 site:foodinc.com.cn"),
+    TavilyWeeklyQuery("tidesight.com", "industry", "观潮新消费", "近7天 中国 地方物产 农产品 新消费 品牌 site:tidesight.com"),
+    TavilyWeeklyQuery("36kr.com", "industry", "36氪", "近7天 中国 农业 农产品 品牌 消费 site:36kr.com"),
+    TavilyWeeklyQuery("xiaohongshu.com", "xiaohongshu", "小红书公开帖", "近7天 山野 农产品 产地 风味 热议 公开帖子 site:xiaohongshu.com"),
+    TavilyWeeklyQuery("douyin.com", "douyin", "抖音公开趋势", "近7天 山野 农产品 产地 风味 热议 site:douyin.com"),
 )
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
+_MAX_WEEKLY_SOURCES_PER_DOMAIN = 3
 _FIRST_PARTY_WEEKLY_LISTINGS = (
     ("https://www.canyin88.com/zixun/", "industry", "红餐网", r'href=["\']([^"\']*/zixun/20\d{2}/\d{1,2}/\d{1,2}/\d+\.html)'),
     ("https://www.tidesight.com/news/", "industry", "观潮新消费", r'href=["\'](https?://[^"\']+/news/\d+\.html)'),
@@ -98,20 +99,29 @@ def _json_from_content(content: str) -> dict[str, Any]:
     return parsed
 
 
-def _is_recent_or_unknown(published_at: object) -> bool:
-    """Known dates must be recent; unknown dates remain explicitly reviewable."""
+def _is_recent(published_at: object) -> bool:
+    """Weekly reports only accept concrete article dates inside the lookback window."""
     if not published_at:
-        return True
+        return False
     match = re.search(r"(20\d{2})[-/](\d{1,2})[-/](\d{1,2})", str(published_at))
     if not match:
-        return True
+        return False
     try:
         published = datetime(int(match.group(1)), int(match.group(2)), int(match.group(3)), tzinfo=_SHANGHAI)
     except ValueError:
-        return True
+        return False
     current = datetime.now(_SHANGHAI)
-    return current - timedelta(days=settings.tide_search_lookback_days) <= published <= current
+    return current - timedelta(days=min(settings.tide_search_lookback_days, 7)) <= published <= current
 
+def _is_candidate_date_eligible(published_at: object) -> bool:
+    """Search indexes often omit dates; the article page remains the authority.
+
+    A missing search-index date is not evidence that an article is stale. Keep
+    it as a candidate, then require a concrete, recent date after fetching the
+    publisher page in ``verify_weekly_source``. Explicitly dated old results
+    can still be discarded early to save a network request.
+    """
+    return not published_at or _is_recent(published_at)
 
 class CreditsProvider:
     def __init__(self) -> None:
@@ -286,7 +296,7 @@ class CreditsProvider:
         return sources
 
     def weekly_tide_candidates(self) -> list[WeeklyTideSource]:
-        """Collect candidate pages directly from Tavily; local verification is still mandatory."""
+        """Collect diverse candidate pages directly from Tavily before local verification."""
         if not self.live:
             raise ProviderError("demo_mode", "演示模式未调用真实联网检索")
         if settings.tide_search_provider.lower() != "tavily":
@@ -295,8 +305,11 @@ class CreditsProvider:
             raise ProviderError("tavily_not_configured", "请先配置 TAVILY_API_KEY", retriable=False)
         sources = self._latest_public_source_candidates()
         seen_urls: set[str] = set()
+        domain_counts: dict[str, int] = {}
         for source in sources:
             seen_urls.add(source.url)
+            domain = next((query.domain for query in _TAVILY_WEEKLY_QUERIES if source.publisher == query.publisher), source.publisher)
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
         if len(sources) >= 10:
             return sources
         for search_query in _TAVILY_WEEKLY_QUERIES:
@@ -311,9 +324,15 @@ class CreditsProvider:
                     continue
                 url = str(raw.get("url") or "").strip()
                 published_at = raw.get("published_date")
-                if not url.startswith("https://") or url in seen_urls or not _is_recent_or_unknown(published_at):
+                if (
+                    not url.startswith("https://")
+                    or url in seen_urls
+                    or domain_counts.get(search_query.domain, 0) >= _MAX_WEEKLY_SOURCES_PER_DOMAIN
+                    or not _is_candidate_date_eligible(published_at)
+                ):
                     continue
                 seen_urls.add(url)
+                domain_counts[search_query.domain] = domain_counts.get(search_query.domain, 0) + 1
                 sources.append(WeeklyTideSource(
                     url=url,
                     channel=search_query.channel,
@@ -349,7 +368,7 @@ class CreditsProvider:
                     published_at = "-".join(date_match.groups()) if date_match else None
                     sources.append(WeeklyTideSource(url, channel, publisher, f"{publisher} 最新公开文章", published_at))
                     count += 1
-                    if count >= 10:
+                    if count >= _MAX_WEEKLY_SOURCES_PER_DOMAIN:
                         break
         return sources
 
@@ -390,12 +409,19 @@ class CreditsProvider:
 
     def weekly_tide_ideas(self, sources: list[dict[str, Any]], holidays: list[dict[str, str]]) -> list[WeeklyTideIdea]:
         instruction = (
-                "基于已验链来源的正文摘录生成5到6条通用的餐饮/新消费创意灵感。"
+                "基于已验链来源的正文摘录，生成最多6条服务于山地农产品、地方物产、食品饮料和原产地品牌的主题灵感。"
+                "重点寻找采收节律、原产地、风味、山野出行、送礼、节气、加工与供应链等母题；"
+                "每条都必须能直接转译为农产品品牌、产品、产地档案或农事内容。"
+                "不要输出餐饮门店开业、菜单、桌边服务、餐厅打卡、咖啡馆、餐饮经营或招商加盟灵感。"
                 "趋势只能作为创意角度，不能写成品牌、产品或功效事实；不得添加未在输入来源中出现的信息。"
-                "每条必须引用至少一个输入 source_urls，主题不可重复；结合未来45天节日，若无适合节点写“非节日驱动”。"
+                "每条必须引用至少一个输入 source_urls，主题不可重复；有几条可靠来源就先生成几条可追溯灵感，1到4条也必须返回，不能为了凑数合并无关故事。"
+                "结合未来45天节日，若无适合节点写“非节日驱动”。"
                 "返回 JSON：{\"ideas\":[{\"theme\":\"...\",\"content_motif\":\"...\","
                 "\"applicable_scene\":\"...\",\"festival_context\":\"...\",\"risk_note\":\"...\","
                 "\"source_urls\":[\"https://...\"]}]}。"
+                "以下节假日规则为上条新闻溯源规则的唯一例外：允许最多2条“节假日节点灵感”，仅可依据 upcoming_holidays 中明确列出的节日，source_urls 必须是空数组；"
+                "这类灵感不得引用、概括或伪造新闻媒体内容，不得声称市场趋势、销量、消费者偏好或其他外部事实。"
+                "节假日节点灵感可以补充但不能替换已有的可追溯来源灵感；verified_sources 较少时仍须优先返回来源能够支撑的结果。"
             )
         context = {"verified_sources": sources, "upcoming_holidays": holidays}
         try:
@@ -427,7 +453,7 @@ class CreditsProvider:
                 continue
             urls = [str(url) for url in raw.get("source_urls", []) if isinstance(url, str)]
             theme = str(raw.get("theme") or "").strip()
-            if not theme or not urls:
+            if not theme:
                 continue
             ideas.append(WeeklyTideIdea(
                 theme=theme,

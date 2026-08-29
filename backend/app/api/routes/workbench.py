@@ -6,7 +6,7 @@ from binascii import Error as Base64Error
 from pathlib import Path
 from typing import Any, Annotated
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -14,7 +14,12 @@ from app.api.routes.fieldwork import current_visitor, envelope, fail, project_fo
 from app.core.config import settings
 from app.fieldwork.store import connect, decode_record, json_value, new_id, now, row_dict
 from app.services.providers import ProviderError, provider
-from app.services.tide_report import latest_report_for_project, shared_idea_for_project
+from app.services.tide_report import (
+    latest_report_for_project,
+    refresh_personal_tide_report,
+    reserve_personal_tide_refresh,
+    shared_idea_for_project,
+)
 from app.services.workflow import create_manual_skeleton, create_task, execute_task, hash_share_token, project_snapshot, submit_task
 
 router = APIRouter()
@@ -474,18 +479,31 @@ def get_tide_report(project_id: str, visitor: Annotated[dict[str, Any], Depends(
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         require_current_direction(connection, project_id)
-    return envelope(latest_report_for_project(project_id))
+    return envelope(latest_report_for_project(project_id, visitor["id"]))
 
 
 @router.get("/tide-report/sample")
-def get_tide_report_sample() -> dict[str, Any]:
-    """Expose the shared, verified weekly report for the read-only demo page.
+def get_tide_report_sample(visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
+    """The demo uses the same anonymous visitor refresh contract as projects."""
+    return envelope(latest_report_for_project("demo-preview", visitor["id"]))
 
-    A report is generated independently from projects and contains only
-    allow-listed public sources. Project-specific favorites and use history are
-    intentionally excluded from this preview.
-    """
-    return envelope(latest_report_for_project("demo-preview"))
+
+@router.post("/tide-report/refresh", status_code=202)
+def refresh_tide_report(
+    background_tasks: BackgroundTasks,
+    visitor: Annotated[dict[str, Any], Depends(current_visitor)],
+) -> dict[str, Any]:
+    if not provider.live:
+        fail(409, "观潮联网搜集尚未配置，请检查检索与提炼服务", "tide_not_configured")
+    state = reserve_personal_tide_refresh(visitor["id"])
+    if state.get("accepted"):
+        background_tasks.add_task(
+            refresh_personal_tide_report,
+            visitor["id"],
+            state["edition_id"],
+            attempt_count=state["attempt_count"],
+        )
+    return envelope({"refresh_state": {key: value for key, value in state.items() if key not in {"accepted", "edition_id"}}})
 
 
 @router.post("/projects/{project_id}/tide-report-ideas/{idea_id}/favorite")
@@ -493,7 +511,7 @@ def favorite_tide_report_idea(project_id: str, idea_id: str, visitor: Annotated[
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         require_current_direction(connection, project_id)
-        if not shared_idea_for_project(connection, idea_id):
+        if not shared_idea_for_project(connection, idea_id, visitor["id"]):
             fail(404, "找不到这条本周灵感", "tide_idea_not_found")
         existing = row_dict(connection.execute(
             "SELECT favorite FROM project_tide_idea_preferences WHERE project_id = ? AND idea_id = ?", (project_id, idea_id)
@@ -513,7 +531,7 @@ def use_tide_report_idea(project_id: str, idea_id: str, visitor: Annotated[dict[
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         require_current_direction(connection, project_id)
-        idea = shared_idea_for_project(connection, idea_id)
+        idea = shared_idea_for_project(connection, idea_id, visitor["id"])
         if not idea:
             fail(404, "找不到这条本周灵感", "tide_idea_not_found")
         connection.execute(
@@ -592,7 +610,7 @@ def generation_context(connection: Any, project_id: str, inspiration_card_id: st
         fail(422, "请先选择一条品牌路线", "direction_required")
     context["direction"] = json.loads(current["content_json"])
     if inspiration_card_id:
-        inspiration = shared_idea_for_project(connection, inspiration_card_id)
+        inspiration = shared_idea_for_project(connection, inspiration_card_id, context["project"].get("visitor_id"))
         if inspiration:
             sources = inspiration.get("sources", [])
             inspiration["source_title"] = "、".join(str(source["source_title"]) for source in sources[:2]) or inspiration["theme"]

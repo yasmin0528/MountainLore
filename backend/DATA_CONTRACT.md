@@ -45,17 +45,23 @@ User (optional for anonymous use) → Project → Session / Message / MediaAsset
 | 分享 | `POST /projects/{id}/brand-manual/shares` | 创建不可变快照；可撤销，撤销后公开链接失效 |
 | 任务 | `GET /tasks/{id}`、`GET /tasks/{id}/events` | 状态、进度、错误与结果可恢复；启动时重排队中断任务 |
 | 任务 | `POST /tasks/{id}/retry` | 只重试失败或部分完成的同一任务，不重新创建幂等请求 |
-| 观潮 | `GET /projects/{id}/tide-report` | 读取共享的本周自动周报；仅已定调项目可访问 |
-| 观潮 | `POST /projects/{id}/tide-report-ideas/{idea_id}/favorite` | 按项目收藏或取消收藏一条共享灵感 |
-| 观潮 | `POST /projects/{id}/tide-report-ideas/{idea_id}/use` | 将共享灵感作为当前项目的出山创意上下文 |
-| 出山 | `POST /projects/{id}/generation-previews` | 生成预览；用户确认保存后才进入历史记录 |
+| 观潮 | `GET /projects/{id}/tide-report`、`GET /tide-report/sample` | 当前访客本周私人周报优先，否则回退共享周报；返回 `edition.scope` 与 `refresh_state` |
+| 观潮 | `POST /tide-report/refresh` | 中国自然周每位访客一次私人后台刷新；失败不计额度，60 秒后可重试 |
+| 观潮 | `POST /projects/{id}/tide-report-ideas/{idea_id}/favorite` | 按项目收藏共享灵感或当前访客自己的私人灵感 |
+| 观潮 | `POST /projects/{id}/tide-report-ideas/{idea_id}/use` | 将有权访问的观潮灵感作为当前项目的出山创意上下文 |
+| 出山 | `POST /projects/{id}/generation-previews` | 生成预览；`peripheral` 需传受控 `material_ids`，用户确认保存后才进入历史记录 |
 
 ## 模型适配器与 Key
 
-- 采风/编志、品牌方案/手册、视觉理解和观潮共享服务端 `OPENAI_NEXT_API_KEY`。观潮周报仅在 `AI_RUNTIME_MODE=live` 时由 Sonar 每周一 09:00（中国时区）自动刷新；未配置或验链不足时保留上一期成功周报，不伪造热点。
+- 采风/编志、品牌方案/手册、视觉理解和观潮使用服务端模型 Key。观潮共享周报在 `AI_RUNTIME_MODE=live` 时每周一 09:00（中国时区）自动刷新且不占私人额度；访客私人结果写入 `tide_personal_editions`，以 `visitor_id + week_key + editorial_version` 唯一，并复用既有来源/灵感明细表。
+- 观潮发布前在内存暂存并执行当前批次及四周历史排重；1–4 条有效灵感标记为 `partial`，5–6 条为 `succeeded`，0 条或外部失败时保留原周报。
 - 图片优先使用 `OPENAI_NEXT_IMAGE_API_KEY`，未设置时回退统一 Key。
 - Key 从不返回前端；`GET /provider/readiness` 只返回逐能力配置状态与模型名。
 - PDF、ZIP、本地 SQLite、媒体读取和分享快照不调用第三方服务。
+
+### 出山生图输入
+
+`generation-previews` 接收用户原始 `inspiration_text`；实体物料模式还接收 `material_ids`（仅限 `sticker`、`gift-box`、`can`、`expo-banner`）。服务端根据模式和物料白名单生成制作提示词片段，并将其与用户输入、确认档案和当前路线组合后才调用图片服务。线上图文模式必须传空物料列表。该片段、最终图片 prompt 和选择会写入不可变输入快照，用于追溯，但不在前端界面呈现。
 
 ## 任务与版本
 

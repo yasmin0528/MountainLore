@@ -24,7 +24,8 @@ type Inspiration = { id: string; theme: string; content_motif: string; source_ur
 type Tide = { id: string; status: string; error_code?: string; completed_at?: string; cards: Inspiration[] };
 type TideReportSource = { id: string; channel: "industry" | "xiaohongshu" | "douyin"; publisher: string; source_url: string; source_title: string; published_at?: string };
 type TideReportIdea = { id: string; theme: string; content_motif: string; applicable_scene: string; festival_context: string; risk_note: string; favorite: number; sources: TideReportSource[] };
-type TideReport = { edition: { id: string; status: string; completed_at?: string; ideas: TideReportIdea[] } | null; latest_attempt: { status: string; error_code?: string; completed_at?: string } | null; preview_sources?: TideReportSource[]; next_refresh_at: string };
+type TideRefreshState = { status: "idle" | "running" | "succeeded" | "partial" | "failed"; phase: "idle" | "collecting" | "verifying" | "deduplicating" | "synthesizing" | "completed" | "failed"; can_refresh: boolean; next_refresh_at: string; error_code?: string | null; attempt_count: number };
+type TideReport = { edition: { id: string; scope: "shared" | "personal"; status: "succeeded" | "partial"; completed_at?: string; ideas: TideReportIdea[] } | null; latest_attempt: { status: string; error_code?: string; completed_at?: string } | null; refresh_state: TideRefreshState; preview_sources?: TideReportSource[]; next_refresh_at: string };
 export type Job = { id: string; template_type: string; status: string; result: Record<string, unknown>; error_code?: string; regeneration_used: number };
 type GenerationPreview = { id: string; template_type: "peripheral" | "xiaohongshu"; status: string; inspiration_text: string; result: Record<string, unknown> };
 export type Workspace = { project: Project; session?: Session | null; archive_cards: ArchiveCard[]; claims?: Claim[]; directions: Direction[]; tasks?: WorkflowTask[]; manual?: { content: Record<string, unknown>; current_version_id?: string }; manual_versions?: ManualVersion[]; manual_assets?: ManualAsset[]; exports?: Array<{ id: string; format: string; download_url?: string }>; shares?: Array<{ id: string; revoked_at?: string; created_at: string }>; tide_searches: Tide[]; generation_jobs: Job[] };
@@ -124,6 +125,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const [archiveModal, setArchiveModal] = useState<"cards" | null>(null);
   const [directionDraft, setDirectionDraft] = useState<Direction | null>(() => initialDirectionDraft ? demoSeed?.directions[0] ?? null : null);
   const [tideReport, setTideReport] = useState<TideReport | null>(null);
+  const [visitorReady, setVisitorReady] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const mobileNavTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileDrawerRef = useRef<HTMLElement>(null);
@@ -139,8 +141,9 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   }
 
   useEffect(() => {
-    if (initialDemo) return;
     void api<{ data: unknown }>("/visitors", { method: "POST" }).then(async () => {
+      setVisitorReady(true);
+      if (initialDemo) return;
       try { const me = await api<{ data: Account | null }>("/auth/me"); setAccount(me.data); } catch { /* Anonymous fieldwork remains available when auth is unavailable. */ }
       try { const directory = await api<{ data: Project[] }>("/projects"); setProjectDirectory(directory.data); } catch { /* workspace loading still works with an older backend */ }
       const saved = window.localStorage.getItem("mountainlore-project-id");
@@ -209,14 +212,26 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     return () => window.clearInterval(timer);
   }, [activeWorkflowTask, demoMode, project, screen]);
 
+  const loadTideReport = useCallback(async () => {
+    if (!visitorReady) return;
+    const path = demoMode ? "/tide-report/sample" : project ? "/projects/" + project.id + "/tide-report" : null;
+    if (!path) return;
+    const response = await api<{ data: TideReport }>(path);
+    setTideReport(response.data);
+  }, [demoMode, project, visitorReady]);
+
   useEffect(() => {
     if (screen !== "tide") return;
-    const path = demoMode ? "/tide-report/sample" : project ? `/projects/${project.id}/tide-report` : null;
-    if (!path) return;
-    void api<{ data: TideReport }>(path)
-      .then((response) => setTideReport(response.data))
-      .catch((caught) => setError(errorText(caught)));
-  }, [demoMode, project, screen]);
+    void loadTideReport().catch((caught) => setError(errorText(caught)));
+  }, [loadTideReport, screen]);
+
+  useEffect(() => {
+    if (screen !== "tide" || tideReport?.refresh_state.status !== "running") return;
+    const timer = window.setInterval(() => {
+      void loadTideReport().catch((caught) => setError(errorText(caught)));
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [loadTideReport, screen, tideReport?.refresh_state.status]);
 
   async function refreshWorkspace(id = project?.id) {
     if (demoMode) return;
@@ -338,6 +353,14 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   async function selectDirection(id: string): Promise<boolean> { if (demoMode) { setWorkspace((current) => current ? { ...current, project: { ...current.project, current_direction_id: id, status: "manual_ready" }, directions: current.directions.map((route) => ({ ...route, state: route.id === id ? "current" : "draft" })) } : current); setScreen("manual"); return true; } setBusy(true); setError(null); try { await api(`/directions/${id}/select`, { method: "POST", headers: { "Idempotency-Key": `manual-${id}` } }); await refreshWorkspace(); setScreen("manual"); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
   async function favoriteTideIdea(id: string) { if (!project) return; setBusy(true); setError(null); try { const response = await api<{ data: { favorite: number } }>(`/projects/${project.id}/tide-report-ideas/${id}/favorite`, { method: "POST" }); setTideReport((current) => current?.edition ? { ...current, edition: { ...current.edition, ideas: current.edition.ideas.map((idea) => idea.id === id ? { ...idea, favorite: response.data.favorite } : idea) } } : current); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
   async function useTideIdea(idea: TideReportIdea) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/tide-report-ideas/${idea.id}/use`, { method: "POST" }); const source = idea.sources[0]; setLaunchInspiration({ id: idea.id, theme: idea.theme, content_motif: idea.content_motif, source_url: source?.source_url ?? "", source_title: source?.source_title ?? idea.theme, published_at: source?.published_at, fit_reason: idea.applicable_scene, risk_note: idea.risk_note, favorite: idea.favorite }); setLaunchArchiveId(null); setGenerationPreview(null); setScreen("launch"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
+  async function refreshTideReport() {
+    setError(null);
+    try {
+      const response = await api<{ data: { refresh_state: TideRefreshState } }>("/tide-report/refresh", { method: "POST" });
+      setTideReport((current) => current ? { ...current, refresh_state: response.data.refresh_state, next_refresh_at: response.data.refresh_state.next_refresh_at } : current);
+      if (!tideReport) await loadTideReport();
+    } catch (caught) { setError(errorText(caught)); }
+  }
   async function selectLaunchArchive(nextProject: Project) {
     setBusy(true); setError(null);
     try {
@@ -434,7 +457,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       {screen === "chronicle" && workspace && <Chronicle workspace={workspace} task={latestRouteTask} onRetry={retryTask} onOpenArchive={() => setArchiveModal("cards")} />}
       {screen === "directions" && workspace && <Directions directions={workspace.directions} claims={workspace.claims ?? []} current={currentDirection} manual={workspace.manual} routeTask={latestRouteTask} busy={busy} onGenerate={createDirections} onRetry={retryTask} onPreview={setDirectionDraft} onOpenManual={() => setScreen("manual")} />}
       {screen === "manual" && workspace && <BrandManualResult key={workspace.manual?.current_version_id ?? workspace.project.status ?? "manual-setup"} workspace={workspace} logoTask={latestLogoTask} patternTask={latestPatternTask} exportTask={workspace.tasks?.find((item) => item.kind === "export")} demoMode={demoMode} busy={busy} onGenerate={createDirections} onSelect={selectDirection} onSave={saveManual} onRefresh={refreshWorkspace} onRetry={retryTask} onGenerateAsset={generateManualAsset} onFailure={setError} onOpenArchive={() => setScreen("archive")} onNext={() => setScreen("tide")} />}
-      {screen === "tide" && workspace && <Tide report={tideReport} demoMode={demoMode} busy={busy} onFavorite={favoriteTideIdea} onUse={useTideIdea} onNext={() => setScreen("launch")} />}
+      {screen === "tide" && workspace && <Tide report={tideReport} demoMode={demoMode} busy={busy} onRefresh={refreshTideReport} onFavorite={favoriteTideIdea} onUse={useTideIdea} onNext={() => setScreen("launch")} />}
       {screen === "launch" && workspace && <Launch workspace={launchWorkspace ?? undefined} projects={projectDirectory} inspiration={launchWorkspace ? launchInspiration ?? undefined : undefined} busy={busy} prompt={launchPrompt} type={launchType} preview={generationPreview} canGenerate={launchGenerationReady} selectedMaterials={selectedLaunchMaterials} visualAssetCount={launchVisualAssetCount} pickerOpen={launchArchivePickerOpen} materialPickerOpen={launchMaterialPickerOpen} onPromptChange={setLaunchPrompt} onTypeChange={setLaunchType} onOpenPicker={() => setLaunchArchivePickerOpen(true)} onClosePicker={() => setLaunchArchivePickerOpen(false)} onOpenMaterialPicker={() => setLaunchMaterialPickerOpen(true)} onCloseMaterialPicker={() => setLaunchMaterialPickerOpen(false)} onToggleMaterial={(id) => setLaunchMaterialIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])} onSelectArchive={selectLaunchArchive} onPreview={previewLaunch} onSavePreview={saveLaunchPreview} onClosePreview={() => setGenerationPreview(null)} onOpenRecords={() => setScreen("assets")} />}
       {archiveModal === "cards" && workspace && <ArchiveFolioDialog project={workspace.project} cards={workspace.archive_cards} onClose={() => setArchiveModal(null)} onEdit={(card) => { setEditing(card); setArchiveModal(null); }} />}
       {directionDraft && workspace && <DirectionDraftDialog project={workspace.project} direction={directionDraft} busy={busy} onClose={() => setDirectionDraft(null)} onConfirm={async () => { if (await selectDirection(directionDraft.id)) setDirectionDraft(null); }} />}
@@ -507,14 +530,60 @@ function AssetHistory({ workspace, onBack, onLaunch }: { workspace: Workspace; o
 function Directions({ directions, claims, current, manual, routeTask, busy, onGenerate, onRetry, onPreview, onOpenManual }: { directions: Direction[]; claims: Claim[]; current?: Direction; manual?: Workspace["manual"]; routeTask?: WorkflowTask; busy: boolean; onGenerate: () => void; onRetry: (id: string) => void; onPreview: (route: Direction) => void; onOpenManual: () => void }) { const latestVersion = Math.max(0, ...directions.map((item) => item.version ?? 0)); const routes = directions.filter((item) => item.state !== "superseded" && (item.version ?? 0) === latestVersion); const manualReady = Boolean(current && manual); return <section className="stage-page"><StageHeader eyebrow="定调 / 品牌路线" title="让事实决定方向，而不是替代事实" copy="点击任一方案查看完整草案；确认路线后会立即创建可编辑手册，视觉资产将在手册内单独生成。" /><div className="stage-toolbar"><span>{current ? `已选：${current.title}` : "请选择一版品牌方向"}</span><button className="secondary-button" onClick={onGenerate} disabled={busy || routeTask?.status === "running"}>{directions.length ? "重新生成新版本" : "生成三版方案"}</button></div><TaskStatus task={routeTask?.status === "succeeded" ? undefined : routeTask} onRetry={onRetry} />{routes.length ? <div className="route-grid route-grid-three">{routes.map((route) => <RouteCard key={route.id} route={route} claims={claims} onOpen={onPreview} />)}</div> : <Empty title="品牌手册首次设置后，这里会出现三版方案" />}{manualReady && <footer className="stage-next"><button className="primary-button" onClick={onOpenManual}>查看完整品牌手册</button></footer>}</section>; }
 function RouteCard({ route, claims, onOpen }: { route: Direction; claims: Claim[]; onOpen: (route: Direction) => void }) { const value = cardContent(route); const points = Array.isArray(value.selling_points) ? value.selling_points : []; const scenarios = Array.isArray(value.target_scenarios) ? value.target_scenarios.join("、") : String(value.target_scenarios ?? ""); const open = () => onOpen(route); return <article className={`route-card route-card-open ${route.state === "current" ? "is-current" : ""}`} role="button" tabIndex={0} aria-label={`查看路线 ${route.route_no}：${route.title} 的品牌手册草案`} onClick={open} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } }}><p className="eyebrow">路线 0{route.route_no} {route.state === "current" ? "· 已选择" : ""}</p><h2>{route.title}</h2><p className="route-one-liner">{String(value.brand_one_liner ?? "")}</p><dl><dt>人群与场景</dt><dd>{String(value.target_audience ?? "")} · {scenarios}</dd><dt>故事与价值</dt><dd>{String(value.story_spine ?? "")}<br />{String(value.emotion_value ?? "")} · {String(value.altruistic_value ?? "")}</dd><dt>三条卖点</dt><dd className="route-evidence-list">{points.map((raw, index) => { const point = typeof raw === "object" && raw ? raw as Record<string, unknown> : { text: String(raw), claimIds: [] }; const claimIds = Array.isArray(point.claimIds) ? point.claimIds.map(String) : []; const linked = claims.filter((claim) => claimIds.includes(claim.id)); return <details key={`${String(point.text)}-${index}`} onClick={(event) => event.stopPropagation()}><summary>{String(point.text)} <small>{linked.length ? `${linked.length} 条证据` : "待补证"}</small></summary>{linked.length ? linked.map((claim) => <p key={claim.id}>{claim.statement}<em>{claim.status} · {claim.risk}</em></p>) : <p>该表达尚未绑定可公开事实，不能直接作为公开卖点。</p>}</details>; })}</dd><dt>视觉路线</dt><dd>{stringList(value.visual_keywords).join(" / ")}</dd></dl><span className="route-card-open-hint">点击查看品牌手册草案 →</span></article>; }
 
-function Tide({ report, demoMode, busy, onFavorite, onUse, onNext }: { report: TideReport | null; demoMode: boolean; busy: boolean; onFavorite: (id: string) => void; onUse: (idea: TideReportIdea) => void; onNext: () => void }) {
+function Tide({ report, demoMode, busy, onRefresh, onFavorite, onUse, onNext }: { report: TideReport | null; demoMode: boolean; busy: boolean; onRefresh: () => void; onFavorite: (id: string) => void; onUse: (idea: TideReportIdea) => void; onNext: () => void }) {
   const edition = report?.edition;
-  const latestAttempt = report?.latest_attempt;
+  const refresh = report?.refresh_state;
   const previewSources = report?.preview_sources ?? [];
-  const stale = edition && latestAttempt?.status === "failed";
   const channelLabel: Record<TideReportSource["channel"], string> = { industry: "行业媒体", xiaohongshu: "小红书公开帖", douyin: "抖音公开趋势" };
-  const status = stale ? `本周刷新未完成，仍可阅读 ${archiveDate(edition?.completed_at)} 的已验链周报` : edition ? `${demoMode ? "实时样例 · " : ""}本期采集于 ${archiveDate(edition.completed_at)} · 仅纳入刷新日前 30 天内的有日期正文` : previewSources.length ? `已验链 ${previewSources.length} 条符合一个月窗口的正文来源，正在汇总为主题灵感。` : latestAttempt?.error_code ? "本期没有足够的一个月内正文来源；系统正在自动重试。" : "正在等待本周自动联网检索。";
-  return <section className="stage-page tide-page"><StageHeader eyebrow={demoMode ? "观潮 / 实时样例" : "观潮 / 本周观察"} title="把行业正文，转译成可执行的主题灵感" copy="每周一 09:00 自动检索、验链并更新。只有刷新日前 30 天内、能识别发布日期并提取到正文的公开来源才会进入本期；趋势不改写品牌事实。" /><div className="tide-ledger"><span>一个月内行业扫描</span><i /><span>日期与正文验链</span><i /><span>提炼主题灵感</span><i /><span>选择机会点</span></div><div className="stage-toolbar tide-status"><span>{status}</span><small>{demoMode ? "只读实时样例" : "无手动刷新"}</small></div>{edition?.ideas.length ? <div className="inspiration-grid">{edition.ideas.map((idea, index) => <article className="inspiration-card tide-report-card" key={idea.id}><header><p className="eyebrow">主题灵感 {String(index + 1).padStart(2, "0")}</p><time>{idea.festival_context}</time></header><h2>{idea.theme}</h2><p>{idea.content_motif}</p><dl className="tide-idea-meta"><dt>可能的机会点</dt><dd>{idea.applicable_scene}</dd><dt>提炼来源 / 原文链接</dt><dd>{idea.sources.map((source) => <a href={source.source_url} target="_blank" rel="noreferrer" key={source.id}><span>{channelLabel[source.channel]} · {source.publisher} · {source.published_at}</span>{source.source_title} <em>打开原文 ↗</em></a>)}</dd></dl><footer><div>{demoMode ? <span>只读实时样例</span> : <><button className="text-button" disabled={busy} onClick={() => onFavorite(idea.id)}>{idea.favorite ? "已收藏" : "收藏灵感"}</button><span>{idea.risk_note}</span></>}</div>{!demoMode && <button className="secondary-button" disabled={busy} onClick={() => onUse(idea)}>用此灵感出山</button>}</footer></article>)}</div> : previewSources.length ? <section className="inspiration-grid" aria-label="已验链联网来源样例">{previewSources.map((source) => <article className="inspiration-card tide-report-card" key={source.id}><header><p className="eyebrow">一个月内已验链来源</p><time>{source.published_at}</time></header><h2>{source.source_title}</h2><p>{channelLabel[source.channel]} · {source.publisher}</p><dl className="tide-idea-meta"><dt>原文链接</dt><dd><a href={source.source_url} target="_blank" rel="noreferrer"><span>打开原始页面</span>{source.source_url} <em>↗</em></a></dd></dl><footer><span>已通过日期、可访问性与正文校验；等待模型汇总，不作为趋势结论展示。</span></footer></article>)}</section> : <Empty title="本期还没有足够的一个月内、可提取正文的公开来源；不会用更早资讯或模拟热点填充。" /> }<footer className="stage-next"><button className="primary-button" onClick={onNext}>{demoMode ? "查看出山演示" : "不选灵感，直接出山"}</button></footer></section>;
+  const phaseOrder: TideRefreshState["phase"][] = ["collecting", "verifying", "deduplicating", "synthesizing"];
+  const phaseLabel: Record<TideRefreshState["phase"], string> = { idle: "等待刷新", collecting: "搜集资讯", verifying: "验链正文", deduplicating: "四周排重", synthesizing: "提炼灵感", completed: "刷新完成", failed: "刷新未完成" };
+  const phaseIndex = refresh?.status === "running" ? phaseOrder.indexOf(refresh.phase) : -1;
+  const errorLabel: Record<string, string> = {
+    tavily_auth_failed: "资讯搜集服务的凭证无效，请联系维护人员。",
+    tavily_quota_or_rate_limited: "资讯搜集服务当前繁忙，60 秒后可重试。",
+    provider_timeout: "资讯提炼超时，旧周报已保留，60 秒后可重试。",
+    no_new_verified_sources: "近四周排重后暂未发现新增且可验链的文章。",
+    no_valid_tide_ideas: "已找到文章，但本次没有提炼出可发布的主题灵感。",
+    refresh_interrupted: "刷新任务运行超时并已中断，旧周报仍在。",
+    tide_refresh_failed: "刷新过程中出现异常，旧周报已保留。",
+    tide_not_configured: "观潮联网服务尚未配置。",
+  };
+  const status = refresh?.status === "running"
+    ? "正在" + phaseLabel[refresh.phase] + "；刷新完成前继续显示当前周报。"
+    : refresh?.status === "failed"
+      ? (errorLabel[refresh.error_code ?? ""] ?? "本次刷新未完成，旧周报已保留。")
+      : edition?.scope === "personal"
+        ? (edition.status === "partial" ? "你的私人周报已更新 · 本周资讯较少，共 " + edition.ideas.length + " 条有效灵感" : "你的私人周报已更新 · 共 " + edition.ideas.length + " 条有效灵感")
+        : edition
+          ? "当前显示全站共享周报 · 采集于 " + archiveDate(edition.completed_at)
+          : "当前还没有可显示的周报，可使用本周私人刷新机会。";
+  const refreshLabel = refresh?.status === "running"
+    ? phaseLabel[refresh.phase] + "…"
+    : refresh && ["succeeded", "partial"].includes(refresh.status)
+      ? "本周已刷新"
+      : refresh?.status === "failed" && !refresh.can_refresh
+        ? "60 秒后可重试"
+        : "刷新本周资讯";
+  const refreshDisabled = !refresh || refresh.status === "running" || ["succeeded", "partial"].includes(refresh.status) || !refresh.can_refresh;
+  const articleCards = previewSources.map((source) => (
+    <article className="inspiration-card tide-report-card" key={source.id}>
+      <header><p className="eyebrow">近 7 天已验链文章</p><time>{source.published_at}</time></header>
+      <h2>{source.source_title}</h2>
+      <p>{channelLabel[source.channel]} · {source.publisher}</p>
+      <dl className="tide-idea-meta"><dt>原文链接</dt><dd><a href={source.source_url} target="_blank" rel="noreferrer"><span>打开原文</span>{source.source_url} <em>↗</em></a></dd></dl>
+      <footer><span>已校验发布日期、可访问性与正文；等待提炼，不作为趋势结论展示。</span></footer>
+    </article>
+  ));
+  return <section className="stage-page tide-page">
+    <StageHeader eyebrow="观潮 / 本周观察" title="把公开观察，转译成山地农产品的主题灵感" copy="每周一自动更新全站共享周报；每位访客每个中国自然周另有一次私人联网刷新。刷新只影响你，趋势不会改写品牌事实。" />
+    <div className="tide-ledger" aria-label="观潮刷新进度">{phaseOrder.map((phase, index) => <span className={phaseIndex === index ? "is-active" : phaseIndex > index || refresh && ["succeeded", "partial"].includes(refresh.status) ? "is-done" : ""} key={phase}>{index + 1}. {phaseLabel[phase]}</span>)}</div>
+    <section className={"tide-refresh-panel " + (refresh?.status ?? "idle")} role="status">
+      <div><strong>{status}</strong><small>{edition ? (edition.scope === "personal" ? "仅你可见，并在你的所有项目中复用" : "所有访客可见；私人刷新不会覆盖它") : "刷新失败不会消耗本周机会"}</small></div>
+      <button className="secondary-button tide-refresh-button" disabled={refreshDisabled} onClick={onRefresh}>{refreshLabel}</button>
+    </section>
+    {edition?.ideas.length ? <div className="inspiration-grid">{edition.ideas.map((idea, index) => <article className="inspiration-card tide-report-card" key={idea.id}><header><p className="eyebrow">{edition.scope === "personal" ? "私人灵感" : "共享灵感"} {String(index + 1).padStart(2, "0")}</p><time>{idea.festival_context}</time></header><h2>{idea.theme}</h2><p>{idea.content_motif}</p><dl className="tide-idea-meta"><dt>可能的机会点</dt><dd>{idea.applicable_scene}</dd>{idea.sources.length ? <><dt>提炼来源 / 原文链接</dt><dd>{idea.sources.map((source) => <a href={source.source_url} target="_blank" rel="noreferrer" key={source.id}><span>{channelLabel[source.channel]} · {source.publisher} · {source.published_at}</span>{source.source_title} <em>打开原文 ↗</em></a>)}</dd></> : <><dt>灵感依据</dt><dd>节假日节点：{idea.festival_context}（不引用新闻媒体）</dd></>}</dl><footer><div>{demoMode ? <span>演示入口不写入项目收藏</span> : <><button className="text-button" disabled={busy} onClick={() => onFavorite(idea.id)}>{idea.favorite ? "已收藏" : "收藏灵感"}</button><span>{idea.risk_note}</span></>}</div>{!demoMode && <button className="secondary-button" disabled={busy} onClick={() => onUse(idea)}>用此灵感出山</button>}</footer></article>)}</div> : previewSources.length ? <section className="inspiration-grid" aria-label="近 7 天已验链文章">{articleCards}</section> : <Empty title={refresh?.status === "running" ? "正在搜集本周资讯，完成后会自动出现在这里。" : "当前没有可显示的周报；可以使用本周私人刷新机会。"} />}
+    <footer className="stage-next"><button className="primary-button" onClick={onNext}>{demoMode ? "查看出山演示" : "不选灵感，直接出山"}</button></footer>
+  </section>;
 }
 
 function Launch({ workspace, projects, inspiration, busy, prompt, type, preview, canGenerate, selectedMaterials, visualAssetCount, pickerOpen, materialPickerOpen, onPromptChange, onTypeChange, onOpenPicker, onClosePicker, onOpenMaterialPicker, onCloseMaterialPicker, onToggleMaterial, onSelectArchive, onPreview, onSavePreview, onClosePreview, onOpenRecords }: { workspace?: Workspace; projects: Project[]; inspiration?: Inspiration; busy: boolean; prompt: string; type: "peripheral" | "xiaohongshu"; preview: GenerationPreview | null; canGenerate: boolean; selectedMaterials: MaterialTemplate[]; visualAssetCount: number; pickerOpen: boolean; materialPickerOpen: boolean; onPromptChange: (value: string) => void; onTypeChange: (value: "peripheral" | "xiaohongshu") => void; onOpenPicker: () => void; onClosePicker: () => void; onOpenMaterialPicker: () => void; onCloseMaterialPicker: () => void; onToggleMaterial: (id: string) => void; onSelectArchive: (project: Project) => void; onPreview: () => void; onSavePreview: () => void; onClosePreview: () => void; onOpenRecords: () => void }) {

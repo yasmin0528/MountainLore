@@ -1,4 +1,5 @@
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -7,10 +8,25 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.fieldwork.store import initialize_database
+from app.fieldwork.store import connect, initialize_database
 from app.main import app
-from app.services.providers import ProviderError, WeeklyTideIdea, WeeklyTideSource, _TAVILY_WEEKLY_QUERIES, provider
-from app.services.tide_report import VerifiedSource, is_allowed_source_url, latest_report_for_project, refresh_weekly_tide_report
+from app.services.providers import ProviderError, WeeklyTideIdea, WeeklyTideSource, _TAVILY_WEEKLY_QUERIES, _is_candidate_date_eligible, provider
+from app.services.tide_report import (
+    TIDE_EDITORIAL_VERSION,
+    VerifiedSource,
+    _is_recent_dated_article,
+    canonical_source_url,
+    deduplicate_verified_sources,
+    is_allowed_source_url,
+    latest_report_for_project,
+    personal_refresh_state,
+    refresh_personal_tide_report,
+    refresh_weekly_tide_report,
+    reserve_personal_tide_refresh,
+    sources_are_same_story,
+)
+from app.services.tide_report import _validate_ideas
+from app.services.tide_report import upcoming_holidays
 import app.services.tide_report as tide_report
 
 
@@ -33,9 +49,10 @@ def _seed_positioned_project(client: TestClient) -> str:
 
 
 def _weekly_sources() -> list[WeeklyTideSource]:
+    publishers = (("Foodaily", "foodaily.com"), ("36氪", "36kr.com"), ("观潮新消费", "tidesight.com"))
     return [
-        WeeklyTideSource(f"https://www.foodaily.com/a{i}", "industry", "Foodaily", f"行业来源 {i}", "2026-08-20")
-        for i in range(1, 7)
+        WeeklyTideSource(f"https://www.{domain}/a{i}", "industry", publisher, f"行业来源 {i}", "2026-08-20")
+        for i, (publisher, domain) in enumerate(publishers * 2, start=1)
     ]
 
 
@@ -66,7 +83,8 @@ def test_weekly_report_is_verified_shared_and_keeps_previous_success(tmp_path: P
     failed = refresh_weekly_tide_report(datetime(2026, 9, 7, 9, tzinfo=SHANGHAI))
     assert failed["status"] == "failed"
     report = latest_report_for_project("any-positioned-project")
-    assert report["edition"]["week_key"] == "2026-08-31"
+    assert report["edition"]["week_key"] == "2026-08-31-editorial-v4"
+    assert report["edition"]["editorial_version"] == TIDE_EDITORIAL_VERSION
     assert len(report["edition"]["ideas"]) == 6
 
 
@@ -81,11 +99,13 @@ def test_tide_report_api_favorite_use_and_generation_snapshot(tmp_path: Path, mo
     refresh_weekly_tide_report(datetime(2026, 8, 31, 9, tzinfo=SHANGHAI))
     monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
     with TestClient(app) as client:
+        client.post("/api/visitors")
         sample = client.get("/api/tide-report/sample").json()["data"]
-        assert sample["edition"]["week_key"] == "2026-08-31"
+        assert sample["edition"]["week_key"] == "2026-08-31-editorial-v4"
         assert len(sample["edition"]["ideas"]) == 6
         project_id = _seed_positioned_project(client)
         report = client.get(f"/api/projects/{project_id}/tide-report").json()["data"]
+        assert report["edition"]["week_key"] == "2026-08-31-editorial-v4"
         idea_id = report["edition"]["ideas"][0]["id"]
         assert client.post(f"/api/projects/{project_id}/tide-report-ideas/{idea_id}/favorite").json()["data"]["favorite"] == 1
         used = client.post(f"/api/projects/{project_id}/tide-report-ideas/{idea_id}/use").json()["data"]
@@ -99,6 +119,41 @@ def test_weekly_source_allowlist_rejects_non_public_and_non_https() -> None:
     assert is_allowed_source_url("https://www.xiaohongshu.com/explore/1")
     assert not is_allowed_source_url("http://www.foodaily.com/article/1")
     assert not is_allowed_source_url("https://example.com/article/1")
+
+
+def test_weekly_source_requires_a_concrete_recent_date(monkeypatch) -> None:
+    monkeypatch.setattr(tide_report, "china_now", lambda: datetime(2026, 8, 29, 12, tzinfo=SHANGHAI))
+    monkeypatch.setattr(settings, "tide_search_lookback_days", 7)
+    assert _is_recent_dated_article("2026-08-23")
+    assert not _is_recent_dated_article("2026-08-21")
+    assert not _is_recent_dated_article(None)
+    assert not _is_recent_dated_article("本周更新")
+
+
+def test_upcoming_holidays_do_not_guess_lunar_dates() -> None:
+    dates = {item["name"]: item["date"] for item in upcoming_holidays(datetime(2026, 8, 29, 9, tzinfo=SHANGHAI))}
+    assert dates["中秋"] == "2026-09-25"
+    assert dates["国庆"] == "2026-10-01"
+
+
+def test_holiday_only_report_can_publish_without_news_sources(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "holiday-only.db"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    initialize_database()
+    holiday_idea = WeeklyTideIdea(
+        "中秋山野物产分享礼", "围绕山野物产的节日分享内容", "中秋送礼与团聚前的内容准备", "中秋（2026-09-17）", "仅作节日创意角度", []
+    )
+    unsupported_idea = WeeklyTideIdea(
+        "泛节日促销", "没有明确节日依据", "随时可用", "非节日驱动", "仅作创意角度", []
+    )
+    assert _validate_ideas([holiday_idea, unsupported_idea], {}, {"中秋"}) == [holiday_idea]
+    monkeypatch.setattr(provider, "weekly_tide_candidates", lambda: [])
+    monkeypatch.setattr(provider, "weekly_tide_ideas", lambda sources, holidays: [holiday_idea])
+    monkeypatch.setattr(tide_report, "upcoming_holidays", lambda at: [{"name": "中秋", "date": "2026-09-17"}])
+    result = refresh_weekly_tide_report(datetime(2026, 8, 31, 9, tzinfo=SHANGHAI))
+    assert result == {"status": "partial", "week_key": "2026-08-31", "idea_count": 1}
+    report = latest_report_for_project("any-positioned-project")
+    assert report["edition"]["ideas"][0]["sources"] == []
 
 
 def test_tide_provider_uses_its_own_models_and_credentials(monkeypatch) -> None:
@@ -173,8 +228,10 @@ def test_tavily_candidates_cover_each_source_group_and_deduplicate(monkeypatch) 
     ]
     assert {source.channel for source in sources} == {"industry", "xiaohongshu", "douyin"}
     assert len({source.url for source in sources}) == len(sources)
+    assert max(sum(source.publisher == publisher for source in sources) for publisher in {source.publisher for source in sources}) <= 3
     assert any(source.published_at is None for source in sources)
     assert all("old-article" not in source.url for source in sources)
+    assert all("近7天" in query.query for query in _TAVILY_WEEKLY_QUERIES)
 
 
 @pytest.mark.parametrize(
@@ -187,3 +244,126 @@ def test_tavily_failure_codes_are_explicit(monkeypatch, status: int, code: str) 
     with pytest.raises(ProviderError) as raised:
         provider._tavily_search(_TAVILY_WEEKLY_QUERIES[0])
     assert raised.value.code == code
+
+
+def test_tide_url_and_story_deduplication_covers_tracking_reprints_and_updates() -> None:
+    tracked = "https://www.foodaily.com/article/42?utm_source=wx&spm=abc&lang=zh#comments"
+    clean = "https://foodaily.com/article/42?lang=zh"
+    assert canonical_source_url(tracked) == canonical_source_url(clean)
+    original = VerifiedSource(
+        tracked, clean, "industry", "Foodaily", "贵州刺梨：从山地采收到城市饮品｜Foodaily",
+        "2026-08-27", "刺梨采收季开始，产地企业正在完善分拣和加工，并尝试进入城市饮品场景。"
+    )
+    reprint = VerifiedSource(
+        "https://www.36kr.com/p/1", "https://www.36kr.com/p/1", "industry", "36氪",
+        "贵州刺梨 从山地采收到城市饮品 - 36氪", "2026-08-27",
+        "刺梨采收季开始，产地企业正在完善分拣和加工，并尝试进入城市饮品场景。"
+    )
+    assert sources_are_same_story(original, reprint)
+    follow_up = VerifiedSource(
+        "https://www.36kr.com/p/2", "https://www.36kr.com/p/2", "industry", "36氪",
+        "贵州刺梨从山地采收到城市饮品", "2026-08-29",
+        "新建冷链仓已经投用，合作社公布首批出口订单和新的加工产线。"
+    )
+    assert not sources_are_same_story(follow_up, original)
+    assert deduplicate_verified_sources([original, reprint, follow_up]) == [original, follow_up]
+
+
+def test_personal_partial_report_is_weekly_reused_and_private(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "personal-partial.db"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    initialize_database()
+    at = datetime(2026, 8, 29, 12, tzinfo=SHANGHAI)
+    monkeypatch.setattr(tide_report, "china_now", lambda: at)
+    sources = _weekly_sources()[:3]
+    monkeypatch.setattr(provider, "weekly_tide_candidates", lambda: sources)
+    monkeypatch.setattr(provider, "weekly_tide_ideas", lambda source_context, holidays: _weekly_ideas(source_context))
+    monkeypatch.setattr(
+        tide_report,
+        "verify_weekly_source",
+        lambda candidate: VerifiedSource(
+            candidate.url, candidate.url, candidate.channel, candidate.publisher,
+            candidate.title, "2026-08-28", "不同来源的完整正文 " + candidate.url,
+        ),
+    )
+
+    reserved = reserve_personal_tide_refresh("visitor-a", at)
+    assert reserved["accepted"] is True
+    result = refresh_personal_tide_report("visitor-a", reserved["edition_id"], at)
+    assert result == {"status": "partial", "idea_count": 3}
+    assert reserve_personal_tide_refresh("visitor-a", at)["accepted"] is False
+
+    first_project = latest_report_for_project("project-a", "visitor-a")
+    second_project = latest_report_for_project("project-b", "visitor-a")
+    other_visitor = latest_report_for_project("project-c", "visitor-b")
+    assert first_project["edition"]["scope"] == "personal"
+    assert first_project["edition"]["id"] == second_project["edition"]["id"]
+    assert first_project["refresh_state"]["status"] == "partial"
+    assert first_project["refresh_state"]["can_refresh"] is False
+    assert other_visitor["edition"] is None
+    assert other_visitor["refresh_state"]["can_refresh"] is True
+
+
+def test_shared_auto_refresh_does_not_consume_private_quota(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "shared-does-not-consume.db"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    initialize_database()
+    at = datetime(2026, 8, 29, 9, tzinfo=SHANGHAI)
+    monkeypatch.setattr(provider, "weekly_tide_candidates", _weekly_sources)
+    monkeypatch.setattr(provider, "weekly_tide_ideas", lambda sources, holidays: _weekly_ideas(sources))
+    monkeypatch.setattr(
+        tide_report,
+        "verify_weekly_source",
+        lambda candidate: VerifiedSource(candidate.url, candidate.url, candidate.channel, candidate.publisher, candidate.title, "2026-08-28", candidate.url),
+    )
+    assert refresh_weekly_tide_report(at)["status"] == "succeeded"
+    state = personal_refresh_state("visitor-a", at)
+    assert state["status"] == "idle"
+    assert state["can_refresh"] is True
+
+
+def test_personal_failure_keeps_shared_report_and_retries_after_60_seconds(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "personal-retry.db"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    initialize_database()
+    at = datetime(2026, 8, 29, 9, tzinfo=SHANGHAI)
+    monkeypatch.setattr(tide_report, "china_now", lambda: at)
+    monkeypatch.setattr(provider, "weekly_tide_candidates", _weekly_sources)
+    monkeypatch.setattr(provider, "weekly_tide_ideas", lambda sources, holidays: _weekly_ideas(sources))
+    monkeypatch.setattr(
+        tide_report,
+        "verify_weekly_source",
+        lambda candidate: VerifiedSource(candidate.url, candidate.url, candidate.channel, candidate.publisher, candidate.title, "2026-08-28", candidate.url),
+    )
+    assert refresh_weekly_tide_report(at)["status"] == "succeeded"
+    shared_id = latest_report_for_project("project", "visitor-a")["edition"]["id"]
+
+    monkeypatch.setattr(provider, "weekly_tide_candidates", lambda: (_ for _ in ()).throw(ProviderError("tavily_quota_or_rate_limited", "busy")))
+    reserved = reserve_personal_tide_refresh("visitor-a", at)
+    assert refresh_personal_tide_report("visitor-a", reserved["edition_id"], at)["status"] == "failed"
+    failed_report = latest_report_for_project("project", "visitor-a")
+    assert failed_report["edition"]["id"] == shared_id
+    assert failed_report["edition"]["scope"] == "shared"
+    assert personal_refresh_state("visitor-a", at + timedelta(seconds=30))["can_refresh"] is False
+    retry = reserve_personal_tide_refresh("visitor-a", at + timedelta(seconds=61))
+    assert retry["accepted"] is True
+    assert retry["attempt_count"] == 2
+
+
+def test_personal_double_click_starts_once_and_new_week_resets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "personal-concurrency.db"))
+    initialize_database()
+    at = datetime(2026, 8, 29, 10, tzinfo=SHANGHAI)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        states = list(executor.map(lambda _: reserve_personal_tide_refresh("visitor-a", at), range(2)))
+    assert sum(bool(state["accepted"]) for state in states) == 1
+    edition_id = next(state["edition_id"] for state in states if state["accepted"])
+    with connect() as connection:
+        connection.execute(
+            "UPDATE tide_personal_editions SET status = 'succeeded', phase = 'completed', completed_at = ?, updated_at = ? WHERE id = ?",
+            (at.isoformat(), at.isoformat(), edition_id),
+        )
+    assert reserve_personal_tide_refresh("visitor-a", at)["accepted"] is False
+    next_week = reserve_personal_tide_refresh("visitor-a", at + timedelta(days=7))
+    assert next_week["accepted"] is True
+    assert next_week["attempt_count"] == 1
