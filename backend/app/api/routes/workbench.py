@@ -306,6 +306,11 @@ def confirm_chronicle(project_id: str, payload: DirectionCreate, visitor: Annota
         pending = connection.execute("SELECT COUNT(*) FROM candidates WHERE project_id = ? AND status = 'pending'", (project_id,)).fetchone()[0]
         if pending:
             fail(409, "请先逐张确认或弃用候选档案", "candidates_pending")
+        research = row_dict(connection.execute(
+            "SELECT status FROM tasks WHERE project_id = ? AND kind = 'culture_research' ORDER BY created_at DESC LIMIT 1", (project_id,)
+        ).fetchone())
+        if research and research["status"] in {"queued", "running"}:
+            fail(409, "正在整理候选档案，请稍候。", "culture_research_pending")
         snapshot = project_snapshot(connection, project_id)
         if not snapshot["archive_cards"]:
             fail(422, "请先确认至少一张档案卡", "archive_required")
@@ -517,11 +522,6 @@ def get_tide_report(project_id: str, visitor: Annotated[dict[str, Any], Depends(
         require_current_direction(connection, project_id)
     return envelope(latest_report_for_project(project_id, visitor["id"]))
 
-
-@router.get("/tide-report/sample")
-def get_tide_report_sample(visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
-    """The demo uses the same anonymous visitor refresh contract as projects."""
-    return envelope(latest_report_for_project("demo-preview", visitor["id"]))
 
 
 @router.post("/tide-report/refresh", status_code=202)

@@ -93,6 +93,14 @@ def initialize_database() -> None:
               archive_card_id TEXT NOT NULL, claim_id TEXT NOT NULL,
               PRIMARY KEY (archive_card_id, claim_id)
             );
+            CREATE TABLE IF NOT EXISTS candidate_source_records (
+              candidate_id TEXT NOT NULL, source_record_id TEXT NOT NULL,
+              PRIMARY KEY (candidate_id, source_record_id)
+            );
+            CREATE TABLE IF NOT EXISTS candidate_claims (
+              candidate_id TEXT NOT NULL, claim_id TEXT NOT NULL,
+              PRIMARY KEY (candidate_id, claim_id)
+            );
             CREATE TABLE IF NOT EXISTS brand_directions (
               id TEXT PRIMARY KEY, project_id TEXT NOT NULL, version INTEGER NOT NULL,
               route_no INTEGER NOT NULL, state TEXT NOT NULL, title TEXT NOT NULL,
@@ -250,6 +258,8 @@ def _retire_incompatible_tables(connection: sqlite3.Connection) -> None:
         "source_records": {"id", "project_id", "field_note_id", "media_asset_id", "source_type", "source_ref", "content", "created_at"},
         "claims": {"id", "project_id", "field_note_id", "statement", "claim_type", "status", "risk", "public_allowed", "source_record_ids_json", "created_at", "updated_at"},
         "archive_card_claims": {"archive_card_id", "claim_id"},
+        "candidate_source_records": {"candidate_id", "source_record_id"},
+        "candidate_claims": {"candidate_id", "claim_id"},
         "brand_directions": {"id", "project_id", "version", "route_no", "state", "title", "content_json", "input_snapshot_json", "created_at"},
         "brand_manuals": {"id", "project_id", "direction_id", "content_json", "updated_at"},
         "manual_versions": {"id", "project_id", "direction_id", "version", "generated_snapshot_json", "content_json", "status", "created_at", "updated_at"},

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.core.config import settings
 from app.fieldwork.store import connect, decode_record, initialize_database, json_value, new_id, now, row_dict, visitor_expiry
 from app.services.providers import ProviderError, provider
-from app.services.workflow import retry_task
+from app.services.workflow import create_task, execute_task, retry_task, submit_task
 
 router = APIRouter()
 
@@ -639,6 +639,53 @@ def restart_fieldwork(
     return envelope({"session": session_payload(session)})
 
 
+def candidate_payload(connection: Any, candidate: dict[str, Any]) -> dict[str, Any]:
+    payload = decode_record(candidate)
+    sources = []
+    rows = connection.execute(
+        """SELECT source_records.* FROM candidate_source_records
+           JOIN source_records ON source_records.id = candidate_source_records.source_record_id
+           WHERE candidate_source_records.candidate_id = ? ORDER BY source_records.created_at""",
+        (candidate["id"],),
+    ).fetchall()
+    for row in rows:
+        source = dict(row)
+        try:
+            metadata = json.loads(source["content"] or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        sources.append({
+            "id": source["id"], "url": source["source_ref"],
+            "title": str(metadata.get("title") or "公开资料"),
+            "excerpt": str(metadata.get("excerpt") or ""),
+            "authority": str(metadata.get("authority") or "media"),
+            "captured_at": source["created_at"],
+        })
+    payload["sources"] = sources
+    claim_rows = connection.execute(
+        """SELECT claims.risk FROM candidate_claims
+           JOIN claims ON claims.id = candidate_claims.claim_id
+           WHERE candidate_claims.candidate_id = ?""", (candidate["id"],)
+    ).fetchall()
+    payload["risk"] = next((row["risk"] for row in claim_rows if row["risk"] == "high"), next((row["risk"] for row in claim_rows if row["risk"] == "medium"), "low"))
+    return payload
+
+
+def project_candidates(connection: Any, project_id: str) -> list[dict[str, Any]]:
+    return [candidate_payload(connection, dict(row)) for row in connection.execute(
+        "SELECT * FROM candidates WHERE project_id = ? ORDER BY created_at", (project_id,)
+    )]
+
+
+def start_culture_research(project: dict[str, Any], session_id: str) -> dict[str, Any]:
+    task, created = create_task(project["id"], "culture_research", {"project": project}, f"culture-research:{session_id}")
+    if created:
+        if provider.live:
+            submit_task(task["id"])
+        else:
+            task = execute_task(task["id"])
+    return task
+
 @router.post("/sessions/{session_id}/finish")
 def finish_session(
     session_id: str,
@@ -646,25 +693,21 @@ def finish_session(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict[str, Any]:
     session, project = session_for_visitor(session_id, visitor)
+    ended = session.get("ended_at") or now()
     with connect() as connection:
-        if session["status"] == "completed":
-            candidates = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM candidates WHERE project_id = ?", (project["id"],))]
-            return envelope({"session": session, "candidates": candidates})
-        notes = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM field_notes WHERE session_id = ? ORDER BY sequence", (session_id,))]
-        referenced_note_ids: set[str] = set()
-        for row in connection.execute("SELECT field_note_ids_json FROM candidates WHERE project_id = ?", (project["id"],)):
-            referenced_note_ids.update(str(note_id) for note_id in json.loads(row["field_note_ids_json"] or "[]"))
-        new_notes = [note for note in notes if note["id"] not in referenced_note_ids]
-        if new_notes:
-            for note in new_notes:
-                connection.execute(
-                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-                    (new_id(), project["id"], json_value([note["id"]]), note["type"], note["title"], note["summary"], now()),
-                )
-        else:
-            candidate_count = connection.execute("SELECT COUNT(*) FROM candidates WHERE project_id = ?", (project["id"],)).fetchone()[0]
-            if candidate_count == 0:
-                # 全程没有采风笔记、也从没生成过候选时，用基础建档兜底。
+        if session["status"] != "completed":
+            notes = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM field_notes WHERE session_id = ? ORDER BY sequence", (session_id,))]
+            referenced_note_ids: set[str] = set()
+            for row in connection.execute("SELECT field_note_ids_json FROM candidates WHERE project_id = ?", (project["id"],)):
+                referenced_note_ids.update(str(note_id) for note_id in json.loads(row["field_note_ids_json"] or "[]"))
+            new_notes = [note for note in notes if note["id"] not in referenced_note_ids]
+            if new_notes:
+                for note in new_notes:
+                    connection.execute(
+                        "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+                        (new_id(), project["id"], json_value([note["id"]]), note["type"], note["title"], note["summary"], now()),
+                    )
+            elif connection.execute("SELECT COUNT(*) FROM candidates WHERE project_id = ?", (project["id"],)).fetchone()[0] == 0:
                 for candidate_type, title, content in (
                     ("BRAND", "品牌主体", project["brand_name"]),
                     ("PRODUCT", "产品产业", project["industry"] or project["core_product"]),
@@ -674,18 +717,19 @@ def finish_session(
                         "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
                         (new_id(), project["id"], json_value([]), candidate_type, title, content, now()),
                     )
-        ended = now()
-        connection.execute("UPDATE sessions SET status = 'completed', ended_at = ? WHERE id = ?", (ended, session_id))
-        connection.execute("UPDATE projects SET status = 'fieldwork_completed', updated_at = ? WHERE id = ?", (ended, project["id"]))
-        candidates = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM candidates WHERE project_id = ?", (project["id"],))]
-    return envelope({"session": {**session, "status": "completed", "ended_at": ended}, "candidates": candidates})
-
+            ended = now()
+            connection.execute("UPDATE sessions SET status = 'completed', ended_at = ? WHERE id = ?", (ended, session_id))
+            connection.execute("UPDATE projects SET status = 'fieldwork_completed', updated_at = ? WHERE id = ?", (ended, project["id"]))
+    research_task = start_culture_research(project, session_id)
+    with connect() as connection:
+        candidates = project_candidates(connection, project["id"])
+    return envelope({"session": {**session, "status": "completed", "ended_at": ended}, "candidates": candidates, "research_task": research_task})
 
 @router.get("/projects/{project_id}/candidates")
 def get_candidates(project_id: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
     project_for_visitor(project_id, visitor)
     with connect() as connection:
-        candidates = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM candidates WHERE project_id = ? ORDER BY created_at", (project_id,))]
+        candidates = project_candidates(connection, project_id)
     return envelope(candidates)
 
 
@@ -699,38 +743,37 @@ def update_candidate(candidate_id: str, action: str, visitor: dict[str, Any]) ->
             status = "confirmed" if action == "confirm" else "discarded"
             connection.execute("UPDATE candidates SET status = ? WHERE id = ?", (status, candidate_id))
             candidate["status"] = status
+            note_ids = json.loads(candidate["field_note_ids_json"])
+            research_claims = connection.execute(
+                """SELECT claims.id, claims.risk FROM candidate_claims
+                   JOIN claims ON claims.id = candidate_claims.claim_id
+                   WHERE candidate_claims.candidate_id = ?""", (candidate_id,)
+            ).fetchall()
+            note_claims = []
+            if note_ids:
+                placeholders = ",".join("?" for _ in note_ids)
+                note_claims = connection.execute(f"SELECT id, risk FROM claims WHERE field_note_id IN ({placeholders})", note_ids).fetchall()
+            source_count = connection.execute("SELECT COUNT(*) FROM candidate_source_records WHERE candidate_id = ?", (candidate_id,)).fetchone()[0]
             if status == "confirmed":
                 archive_id = new_id()
+                source_summary = f"公开资料 {source_count} 条" if source_count else ("基础建档" if not note_ids else "采风问答与图片来源")
                 connection.execute(
                     "INSERT INTO archive_cards (id, project_id, candidate_id, type, title, content, status, created_at, updated_at, content_version, source_summary) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, 1, ?)",
-                    (archive_id, candidate["project_id"], candidate_id, candidate["type"], candidate["title"], candidate["content"], now(), now(), "基础建档" if not json.loads(candidate["field_note_ids_json"]) else "采风问答与图片来源"),
+                    (archive_id, candidate["project_id"], candidate_id, candidate["type"], candidate["title"], candidate["content"], now(), now(), source_summary),
                 )
-                note_ids = json.loads(candidate["field_note_ids_json"])
-                if note_ids:
-                    placeholders = ",".join("?" for _ in note_ids)
-                    claims = connection.execute(
-                        f"SELECT id, risk FROM claims WHERE field_note_id IN ({placeholders})", note_ids
-                    ).fetchall()
-                    for claim in claims:
-                        connection.execute(
-                            "INSERT OR IGNORE INTO archive_card_claims (archive_card_id, claim_id) VALUES (?, ?)",
-                            (archive_id, claim["id"]),
-                        )
-                        connection.execute(
-                            "UPDATE claims SET status = 'confirmed', public_allowed = ?, updated_at = ? WHERE id = ?",
-                            (0 if claim["risk"] == "high" else 1, now(), claim["id"]),
-                        )
-            elif status == "discarded":
-                note_ids = json.loads(candidate["field_note_ids_json"])
-                if note_ids:
-                    placeholders = ",".join("?" for _ in note_ids)
-                    connection.execute(
-                        f"UPDATE claims SET status = 'rejected', public_allowed = 0, updated_at = ? WHERE field_note_id IN ({placeholders})",
-                        [now(), *note_ids],
-                    )
+                for claim in research_claims:
+                    connection.execute("INSERT OR IGNORE INTO archive_card_claims (archive_card_id, claim_id) VALUES (?, ?)", (archive_id, claim["id"]))
+                    connection.execute("UPDATE claims SET status = 'confirmed', public_allowed = 1, updated_at = ? WHERE id = ?", (now(), claim["id"]))
+                for claim in note_claims:
+                    connection.execute("INSERT OR IGNORE INTO archive_card_claims (archive_card_id, claim_id) VALUES (?, ?)", (archive_id, claim["id"]))
+                    connection.execute("UPDATE claims SET status = 'confirmed', public_allowed = ?, updated_at = ? WHERE id = ?", (0 if claim["risk"] == "high" else 1, now(), claim["id"]))
+            else:
+                all_claims = [*research_claims, *note_claims]
+                for claim in all_claims:
+                    connection.execute("UPDATE claims SET status = 'rejected', public_allowed = 0, updated_at = ? WHERE id = ?", (now(), claim["id"]))
         archive = row_dict(connection.execute("SELECT * FROM archive_cards WHERE candidate_id = ?", (candidate_id,)).fetchone())
-    return {"candidate": decode_record(candidate), "archive_card": archive}
-
+        payload = candidate_payload(connection, candidate)
+    return {"candidate": payload, "archive_card": archive}
 
 @router.post("/candidates/{candidate_id}/confirm")
 def confirm_candidate(candidate_id: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
