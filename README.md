@@ -120,11 +120,9 @@
 | 欢迎 / 选品页（预置品类、自定义产品、隐私授权） | ![选品页](PRD/screenshots/01-selection.png) |
 | 采风访谈（对话式提问、图片上传、实时笔记） | ![采风](PRD/screenshots/02-fieldwork.png) |
 | 候选档案确认（逐张确认 / 弃用） | ![候选档案](PRD/screenshots/03-candidates.png) |
-| 定调：两版品牌路线选择 | ![品牌路线](PRD/screenshots/04-directions.png) |
 | 品牌手册（类 PPT 视图） | ![品牌手册](PRD/screenshots/05-manual.png) |
 | 观潮：每周灵感与收藏 | ![观潮](PRD/screenshots/06-tide.png) |
 | 出山：生成结果与历史版本 | ![出山](PRD/screenshots/07-launch.png) |
-| 分享页（不可变快照） | ![分享页](PRD/screenshots/08-share.png) |
 
 ---
 
