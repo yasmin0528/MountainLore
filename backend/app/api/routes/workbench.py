@@ -476,6 +476,17 @@ def get_tide_report(project_id: str, visitor: Annotated[dict[str, Any], Depends(
     return envelope(latest_report_for_project(project_id))
 
 
+@router.get("/tide-report/sample")
+def get_tide_report_sample() -> dict[str, Any]:
+    """Expose the shared, verified weekly report for the read-only demo page.
+
+    A report is generated independently from projects and contains only
+    allow-listed public sources. Project-specific favorites and use history are
+    intentionally excluded from this preview.
+    """
+    return envelope(latest_report_for_project("demo-preview"))
+
+
 @router.post("/projects/{project_id}/tide-report-ideas/{idea_id}/favorite")
 def favorite_tide_report_idea(project_id: str, idea_id: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
     project_for_visitor(project_id, visitor)
