@@ -29,12 +29,26 @@ def test_workbench_direction_discard_and_launch_snapshot(tmp_path: Path, monkeyp
         project_id, _ = _seed_confirmed_card(client)
         workspace = client.get(f"/api/projects/{project_id}/workspace").json()["data"]
         card = workspace["archive_cards"][0]
-        directions = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"]
-        assert len(directions) == 2
+        deferred = client.post(
+            f"/api/projects/{project_id}/chronicle/confirm",
+            json={"request_id": "archive-first", "defer_directions": True},
+        ).json()["data"]
+        assert deferred == {"task": None, "routes": [], "deferred": True}
+        assert client.get(f"/api/projects/{project_id}/workspace").json()["data"]["project"]["status"] == "archive_ready"
+        preferences = {"logo_mode": "ai", "font_family": "Source Han Serif SC", "font_label": "思源宋体 / 思源黑体", "palette": ["#18372B", "#2B6173", "#D5A72B", "#F7F1E3"]}
+        directions = client.post(f"/api/projects/{project_id}/directions", json={"visual_preferences": preferences}).json()["data"]["routes"]
+        assert len(directions) == 3
         workspace_routes = client.get(f"/api/projects/{project_id}/workspace").json()["data"]["directions"]
         assert workspace_routes[0]["content_json"]["brand_one_liner"]
+        assert workspace_routes[0]["content_json"]["visual_preferences"] == preferences
+        assert {point["category"] for point in workspace_routes[0]["content_json"]["selling_points"]}.issubset({"产品创新", "创新活动策划"})
         selected = client.post(f"/api/directions/{directions[0]['id']}/select").json()["data"]
         assert selected["state"] == "current"
+        assert selected["task"] is None
+        assert selected["manual"]["content"]["logo_design"]
+        manual_workspace = client.get(f"/api/projects/{project_id}/workspace").json()["data"]
+        assert manual_workspace["manual_versions"][0]["status"] == "text_ready"
+        assert not [task for task in manual_workspace["tasks"] if task["kind"] in {"manual_generation", "logo_generation", "export"}]
         search_id, inspiration_id = new_id(), new_id()
         with connect() as connection:
             connection.execute(
@@ -120,7 +134,7 @@ def test_project_directory_and_manual_keep_identity(tmp_path: Path, monkeypatch)
         directory = client.get("/api/projects").json()["data"]
         assert [project["id"] for project in directory] == [project_id]
         routes = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"]
-        assert len(routes) == 2
+        assert len(routes) == 3
         client.post(f"/api/directions/{routes[0]['id']}/select")
         saved = client.patch(
             f"/api/projects/{project_id}/brand-manual",

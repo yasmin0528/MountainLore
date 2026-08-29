@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,13 +36,16 @@ class Settings(BaseSettings):
     openai_next_image_base_url: str = "https://draw.openai-next.com/v1"
     openai_next_image_api_key: str = ""
     openai_next_image_model: str = "gpt-image-2"
-    provider_timeout_seconds: int = 45
+    provider_timeout_seconds: int = 120
     tide_refresh_interval_seconds: int = 60
     tide_source_verify_timeout_seconds: int = 12
     tide_source_max_results: int = 30
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Resolve from the backend package instead of the process working
+        # directory.  Uvicorn is commonly started from the repository root,
+        # where a relative `.env` would otherwise be missed silently.
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         enable_decoding=False,

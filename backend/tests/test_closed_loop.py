@@ -85,23 +85,20 @@ def test_evidence_bound_async_closed_loop_and_delivery(tmp_path: Path, monkeypat
         assert route_task["status"] == "succeeded"
         routes = client.get(f"/api/projects/{project_id}/workspace").json()["data"]["directions"]
         visible = [route for route in routes if route["state"] != "superseded"]
-        assert len(visible) == 2
+        assert len(visible) == 3
         allowed_ids = {claim["id"] for claim in public_claims}
         for route in visible:
             for point in route["content_json"]["selling_points"]:
                 assert set(point["claimIds"]).issubset(allowed_ids)
 
         selected = client.post(f"/api/directions/{visible[0]['id']}/select").json()["data"]
-        manual_task = wait_task(client, selected["task"]["id"])
-        assert manual_task["status"] == "partial"  # text survives when demo image generation is unavailable
+        assert selected["task"] is None  # demo mode has no deferred image job
+        assert selected["manual"]["manual_version_id"]
         workspace = client.get(f"/api/projects/{project_id}/workspace").json()["data"]
         assert workspace["manual"]["content"]["brand_name"] == "见山刺梨"
         assert workspace["manual_versions"][0]["status"] == "text_ready"
         auto_export_tasks = [task for task in workspace["tasks"] if task["kind"] == "export"]
-        assert len(auto_export_tasks) == 1
-        auto_export_result = wait_task(client, auto_export_tasks[0]["id"])
-        assert auto_export_result["status"] == "succeeded"
-        assert {item["format"] for item in auto_export_result["result"]["exports"]} == {"pdf", "zip"}
+        assert not auto_export_tasks
 
         upload = client.post(
             "/api/media", content=PNG_1X1,
@@ -128,7 +125,7 @@ def test_evidence_bound_async_closed_loop_and_delivery(tmp_path: Path, monkeypat
         export_result = wait_task(client, export_task["id"])
         assert export_result["status"] == "succeeded"
         exported = {item["format"]: client.get(item["download_url"]).content for item in export_result["result"]["exports"]}
-        assert len(PdfReader(io.BytesIO(exported["pdf"])).pages) >= 1
+        assert len(PdfReader(io.BytesIO(exported["pdf"])).pages) == 10
         with zipfile.ZipFile(io.BytesIO(exported["zip"])) as archive:
             assert {"brand-manual.json", "brand-manual.pdf"}.issubset(archive.namelist())
 

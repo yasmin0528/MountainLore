@@ -1,4 +1,5 @@
 import hashlib
+from urllib.parse import unquote
 import asyncio
 import json
 import secrets
@@ -103,7 +104,7 @@ def current_visitor(visitor_token: Annotated[str | None, Cookie()] = None) -> di
 def project_for_visitor(project_id: str, visitor: dict[str, Any]) -> dict[str, Any]:
     with connect() as connection:
         project = row_dict(connection.execute(
-            "SELECT * FROM projects WHERE id = ? AND visitor_id = ?", (project_id, visitor["id"])
+            "SELECT * FROM projects WHERE id = ? AND visitor_id = ? AND status != 'deleted'", (project_id, visitor["id"])
         ).fetchone())
     if not project:
         fail(404, "找不到该品牌项目", "project_not_found")
@@ -145,11 +146,60 @@ def list_projects(visitor: Annotated[dict[str, Any], Depends(current_visitor)]) 
         projects = [
             row_dict(row)
             for row in connection.execute(
-                "SELECT * FROM projects WHERE visitor_id = ? ORDER BY updated_at DESC, created_at DESC",
+                "SELECT * FROM projects WHERE visitor_id = ? AND status != 'deleted' ORDER BY updated_at DESC, created_at DESC",
                 (visitor["id"],),
             )
         ]
     return envelope(projects)
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
+    """Permanently remove one visitor-owned project and all of its records."""
+    project_for_visitor(project_id, visitor)
+    with connect() as connection:
+        media_keys = [row["storage_key"] for row in connection.execute(
+            "SELECT storage_key FROM media_assets WHERE project_id = ?", (project_id,)
+        )]
+        export_keys = [row["storage_key"] for row in connection.execute(
+            "SELECT storage_key FROM exports WHERE project_id = ? AND storage_key IS NOT NULL", (project_id,)
+        )]
+        connection.execute("DELETE FROM archive_card_claims WHERE archive_card_id IN (SELECT id FROM archive_cards WHERE project_id = ?)", (project_id,))
+        connection.execute("DELETE FROM archive_card_claims WHERE claim_id IN (SELECT id FROM claims WHERE project_id = ?)", (project_id,))
+        connection.execute("DELETE FROM inspiration_cards WHERE tide_search_id IN (SELECT id FROM tide_searches WHERE project_id = ?)", (project_id,))
+        connection.execute("DELETE FROM project_tide_idea_preferences WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM manual_assets WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM exports WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM share_snapshots WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM generation_previews WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM generation_jobs WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM brand_manuals WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM manual_versions WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM brand_directions WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM tide_searches WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM tasks WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM source_records WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM claims WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM archive_cards WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM candidates WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM media_assets WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM field_notes WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)", (project_id,))
+        connection.execute("DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)", (project_id,))
+        connection.execute("DELETE FROM sessions WHERE project_id = ?", (project_id,))
+        connection.execute("DELETE FROM projects WHERE id = ? AND visitor_id = ?", (project_id, visitor["id"]))
+
+    media_root = Path(settings.media_directory).resolve()
+    for storage_key in [*media_keys, *export_keys]:
+        file_path = (media_root / storage_key).resolve()
+        if media_root not in file_path.parents or not file_path.is_file():
+            continue
+        try:
+            file_path.unlink()
+        except OSError:
+            # Database deletion has already completed. A later cleanup may
+            # remove a locked local development file without reviving records.
+            continue
+    return envelope({"id": project_id, "status": "deleted"})
 
 
 @router.get("/projects/{project_id}")
@@ -168,6 +218,7 @@ async def upload_media(
     visitor: Annotated[dict[str, Any], Depends(current_visitor)],
 ) -> dict[str, Any]:
     project_for_visitor(project_id, visitor)
+    original_name = unquote(original_name) or "image"
     content_type = request.headers.get("content-type", "")
     if not content_type.startswith("image/"):
         fail(422, "仅支持上传图片文件", "invalid_media", "file")
@@ -292,6 +343,11 @@ def create_message(
     if not payload.skipped and not payload.content.strip() and not payload.media_asset_ids:
         fail(422, "请填写回答、上传图片或跳过本题", "empty_message", "content")
     with connect() as connection:
+        completed_answers = connection.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'", (session_id,)
+        ).fetchone()[0]
+        if completed_answers >= 3:
+            fail(409, "本轮采风已经收束，请结束本次采风并确认候选档案", "fieldwork_ready_to_finish")
         if idempotency_key:
             task = row_dict(connection.execute("SELECT * FROM tasks WHERE idempotency_key = ?", (idempotency_key,)).fetchone())
             if task:

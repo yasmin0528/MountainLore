@@ -159,24 +159,16 @@ def _run_task(task_id: str) -> None:
         if task["kind"] == "route_generation":
             result = _generate_routes(task)
         elif task["kind"] == "manual_generation":
-            result = _generate_manual(task)
+            # Legacy persisted tasks are upgraded to the immediate, route-derived
+            # deck instead of re-entering the old text-and-three-images pipeline.
+            result = create_manual_skeleton(task["project_id"], json.loads(task["input_snapshot_json"]))
+        elif task["kind"] in {"logo_generation", "manual_asset_generation"}:
+            result = _generate_manual_asset(task)
         elif task["kind"] == "export":
             result = _generate_exports(task)
         else:
             raise ProviderError("unsupported_task", f"不支持的任务类型：{task['kind']}")
-        # 一旦品牌手册文字与可用视觉资产已落库，自动产出可下载的 PDF 和图包。
-        # 以手册版本为幂等键，刷新页面或恢复任务都不会重复生成同一套文件。
-        if task["kind"] == "manual_generation" and result.get("manual_version_id"):
-            export_task, export_created = create_task(
-                task["project_id"],
-                "export",
-                {"manual_version_id": result["manual_version_id"], "formats": ["pdf", "zip"]},
-                f"manual-exports:{result['manual_version_id']}",
-                parent_task_id=task_id,
-            )
-            result["export_task_id"] = export_task["id"]
-            if export_created:
-                submit_task(export_task["id"])
+        # 导出只由用户显式触发，避免手册首次可见时与视觉任务争抢队列。
         final_status = "partial" if result.pop("_partial", False) else "succeeded"
         _task_update(task_id, status=final_status, progress=100, result=result)
     except ProviderError as exc:
@@ -208,6 +200,7 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 for i in range(3)
             ],
             "evidenceGaps": evidence_gaps, "visual_keywords": ["田野手记", "暖纸", "靛蓝", "手绘标注"],
+            "logo_design": "以一枚从山路与果实轮廓中提炼的手绘印记为核心：外轮廓像展开的田野记录页，中间保留一条向上的山路留白。采用靛蓝单色为主、暖纸为底，小尺寸仍清晰；不使用文字、渐变或复杂徽章。",
             "positive_prompt": "无文字品牌符号，贵州山地田野记录感，克制手绘，单色轮廓，适合小尺寸",
             "negative_prompt": "文字，渐变，玻璃拟态，旅游海报，疗效承诺，复杂徽章",
             "content_tone": "具体、平实、有出处", "forbidden_expressions": ["顶级", "治愈", "唯一", "包治百病"],
@@ -224,17 +217,35 @@ def _fallback_routes(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 for i in range(3)
             ],
             "evidenceGaps": evidence_gaps, "visual_keywords": ["现代标本", "苔藓绿", "明黄索引", "留白"],
+            "logo_design": "以产品切面与山地等高线组合成现代标本符号：使用几何圆角与一条明黄索引线，形成可被缩小为 App 图标的稳定结构。主色为苔藓绿，辅以明黄；整体留白、无文字、无写实插画。",
             "positive_prompt": "无文字品牌符号，山地农作物抽象标本，现代编辑设计，几何留白，小尺寸清晰",
             "negative_prompt": "文字，霓虹，渐变，玻璃拟态，旅游纪念品，写实风景照片",
             "content_tone": "短句、清楚、不过度修辞", "forbidden_expressions": ["网红", "天花板", "药食同源疗效", "销量第一"],
+        },
+        {
+            "title": "路线三｜风物共创场", "candidate_brand_name": project["brand_name"],
+            "brand_one_liner": f"围绕{project['core_product']}，让{project['origin']}的风物在共同参与中被看见。",
+            "target_audience": "愿意参与地方文化体验、品牌活动与内容共创的人群",
+            "target_scenarios": ["产地开放日", "节气共创活动", "品牌联名与社群分享"],
+            "story_spine": "把真实产地材料变成可参与的活动线索，让品牌不只讲述地方，也邀请人们一起留下新故事。",
+            "emotion_value": "开放、鲜活、有参与感", "altruistic_value": "让地方劳动与知识在真实参与中获得持续关注。",
+            "selling_points": [
+                {"text": anchors[(i + 2) % 3], "claimIds": [claim_ids[i]] if i < len(claim_ids) else [], "evidenceStatus": "confirmed" if i < len(claim_ids) else "gap"}
+                for i in range(3)
+            ],
+            "evidenceGaps": evidence_gaps, "visual_keywords": ["活动路标", "朱砂红", "山地绿", "手作拼贴"],
+            "logo_design": "以一枚可被参与者盖印、拼接的活动路标为核心：山形、对话框与种子颗粒形成开放的三角构图。主色为山地绿与朱砂红，边缘保留手作切纸感；不出现文字，避免旅游海报式图案。",
+            "positive_prompt": "无文字品牌符号，地方风物共创活动感，手作拼贴，清晰轮廓，小尺寸可识别",
+            "negative_prompt": "文字，渐变，玻璃拟态，旅游宣传画，舞台灯光，复杂徽章",
+            "content_tone": "热情、具体、鼓励参与", "forbidden_expressions": ["唯一", "顶流", "疗愈", "未经证实的文化背书"],
         },
     ]
 
 
 def _validate_routes(raw: Any, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     routes = raw if isinstance(raw, list) else []
-    if len(routes) != 2:
-        raise ProviderError("invalid_route_count", "品牌方案必须恰好返回两版")
+    if len(routes) != 3:
+        raise ProviderError("invalid_route_count", "品牌方案必须恰好返回三版")
     allowed = {claim["id"] for claim in snapshot["claims"]}
     validated: list[dict[str, Any]] = []
     for index, route in enumerate(routes, start=1):
@@ -243,16 +254,21 @@ def _validate_routes(raw: Any, snapshot: dict[str, Any]) -> list[dict[str, Any]]
         points = route.get("selling_points") if isinstance(route.get("selling_points"), list) else []
         normalized_points: list[dict[str, Any]] = []
         gaps = [str(item) for item in route.get("evidenceGaps", []) if str(item).strip()]
-        for point in points[:3]:
+        for point_index, point in enumerate(points[:3]):
             point = point if isinstance(point, dict) else {"text": str(point)}
             ids = [str(item) for item in point.get("claimIds", []) if str(item) in allowed]
             text = str(point.get("text") or "待补卖点")
             if not ids:
                 gaps.append(f"“{text}”尚未绑定可公开事实")
-            normalized_points.append({"text": text, "claimIds": ids, "evidenceStatus": "confirmed" if ids else "gap"})
+            category = str(point.get("category") or ("产品创新" if point_index < 2 else "创新活动策划"))
+            if category not in {"产品创新", "创新活动策划"}:
+                category = "产品创新"
+            normalized_points.append({"category": category, "explanation": str(point.get("explanation") or text), "text": text, "claimIds": ids, "evidenceStatus": "confirmed" if ids else "gap"})
         while len(normalized_points) < 3:
-            normalized_points.append({"text": "待补充并核验的卖点", "claimIds": [], "evidenceStatus": "gap"})
-        route.update({"title": str(route.get("title") or f"路线 {index}"), "selling_points": normalized_points, "evidenceGaps": list(dict.fromkeys(gaps))})
+            category = "创新活动策划" if len(normalized_points) == 2 else "产品创新"
+            normalized_points.append({"category": category, "explanation": "待补充并核验的卖点", "text": "待补充并核验的卖点", "claimIds": [], "evidenceStatus": "gap"})
+        logo_design = str(route.get("logo_design") or route.get("positive_prompt") or "以无文字核心图形建立品牌识别，保证小尺寸清晰可辨。")
+        route.update({"title": str(route.get("title") or f"路线 {index}"), "selling_points": normalized_points, "evidenceGaps": list(dict.fromkeys(gaps)), "logo_design": logo_design, "visual_preferences": snapshot.get("visual_preferences", {})})
         validated.append(route)
     return validated
 
@@ -264,10 +280,11 @@ def _generate_routes(task: dict[str, Any]) -> dict[str, Any]:
         result = provider.chat_json(
             model=settings.openai_next_text_model,
             instruction=(
-                "基于冻结的项目与可公开事实，生成恰好两版、明显不同的品牌初步方案。只输出 JSON 对象 {routes:[...]}。"
+                "基于冻结的项目、可公开事实与visual_preferences，生成恰好三版、受众/场景/叙事与视觉都明显不同的品牌初步方案。只输出 JSON 对象 {routes:[...]}。"
                 "每版必须含 title,candidate_brand_name,brand_one_liner,target_audience,target_scenarios,story_spine,"
-                "emotion_value,altruistic_value,selling_points(恰好3项，每项含text和claimIds),evidenceGaps,"
-                "visual_keywords,positive_prompt,negative_prompt,content_tone,forbidden_expressions。"
+                "emotion_value,altruistic_value,selling_points(恰好3项，每项含category、explanation、text和claimIds；category只能是产品创新或创新活动策划),evidenceGaps,"
+                "visual_keywords,logo_design,positive_prompt,negative_prompt,content_tone,forbidden_expressions。"
+                "logo_design 必须是一段具体的无文字 Logo 设计说明，写清核心符号、构图、色彩或质感、小尺寸使用原则和明确避免项；三版的 Logo 方案必须显著不同。"
                 "claimIds只能使用输入 claims 的 id；无依据的表达不得伪装成事实，必须留空claimIds并写入evidenceGaps。"
             ),
             context=snapshot,
@@ -305,6 +322,8 @@ def _generate_routes(task: dict[str, Any]) -> dict[str, Any]:
 def _fallback_manual(snapshot: dict[str, Any]) -> dict[str, Any]:
     project = snapshot["project"]
     route = snapshot["direction"]["content"]
+    preferences = route.get("visual_preferences") or snapshot.get("visual_preferences") or {}
+    scenarios = route.get("target_scenarios", [])
     return {
         "brand_name": route.get("candidate_brand_name") or project["brand_name"],
         "brand_introduction": route.get("story_spine", ""), "slogan": route.get("brand_one_liner", ""),
@@ -312,10 +331,73 @@ def _fallback_manual(snapshot: dict[str, Any]) -> dict[str, Any]:
         "story_system": {"main_story": route.get("story_spine", ""), "chapters": ["来处", "人物", "工艺", "今天的使用方式"]},
         "voice": {"do": route.get("content_tone", ""), "dont": route.get("forbidden_expressions", [])},
         "selling_points": route.get("selling_points", []), "evidence_gaps": route.get("evidenceGaps", []),
-        "visual_system": {"keywords": route.get("visual_keywords", []), "logo_direction": "无文字图形，优先保证24px辨识度", "packaging": "以档案索引组织信息，保留事实来源入口", "pattern": "从产地、原料或工具轮廓抽取可平铺纹样"},
+        "brand_one_liner": route.get("brand_one_liner", ""),
+        "target_audience": route.get("target_audience", ""),
+        "target_scenarios": "、".join(scenarios) if isinstance(scenarios, list) else scenarios,
+        "story_spine": route.get("story_spine", ""),
+        "font_family": preferences.get("font_family", "Source Han Serif SC"),
+        "font_label": preferences.get("font_label", "思源宋体 / 思源黑体"),
+        "color_palette": preferences.get("palette") or ["#18372B", "#2B6173", "#D5A72B", "#F7F1E3"],
+        "logo_mode": preferences.get("logo_mode", "ai"),
+        "logo_media_asset_id": preferences.get("logo_media_asset_id"),
+        "logo_design": route.get("logo_design", "无文字图形，优先保证24px辨识度"),
+        "visual_system": {"keywords": route.get("visual_keywords", []), "logo_direction": route.get("logo_design", "无文字图形，优先保证24px辨识度"), "packaging": "以档案索引组织信息，保留事实来源入口", "pattern": "从产地、原料或工具轮廓抽取可平铺纹样"},
         "applications": ["包装正面", "档案详情页", "社交媒体封面", "伴手礼包装"],
         "disclaimer": "AI 生成的品牌工作稿；公开卖点仅可使用已确认且允许公开的事实。",
     }
+
+
+def create_manual_skeleton(project_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Persist a route-derived, editable deck without waiting for another model call."""
+    direction = snapshot["direction"]
+    content = _fallback_manual(snapshot)
+    with connect() as connection:
+        manual = row_dict(connection.execute(
+            "SELECT * FROM brand_manuals WHERE project_id = ?", (project_id,)
+        ).fetchone())
+        if manual and manual.get("direction_id") == direction["id"] and manual.get("current_version_id"):
+            version = row_dict(connection.execute(
+                "SELECT * FROM manual_versions WHERE id = ?", (manual["current_version_id"],)
+            ).fetchone())
+            if version:
+                return {"manual_version_id": version["id"], "content": json.loads(version["content_json"]), "created": False}
+        version_no = connection.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM manual_versions WHERE project_id = ?", (project_id,)
+        ).fetchone()[0]
+        version_id = new_id()
+        timestamp = now()
+        connection.execute(
+            """INSERT INTO manual_versions
+               (id, project_id, direction_id, version, generated_snapshot_json, content_json, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'text_ready', ?, ?)""",
+            (version_id, project_id, direction["id"], version_no, json_value(content), json_value(content), timestamp, timestamp),
+        )
+        if manual:
+            connection.execute(
+                "UPDATE brand_manuals SET direction_id = ?, content_json = ?, current_version_id = ?, generated_snapshot_json = ?, updated_at = ? WHERE project_id = ?",
+                (direction["id"], json_value(content), version_id, json_value(content), timestamp, project_id),
+            )
+        else:
+            connection.execute(
+                """INSERT INTO brand_manuals
+                   (id, project_id, direction_id, content_json, updated_at, current_version_id, generated_snapshot_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (new_id(), project_id, direction["id"], json_value(content), timestamp, version_id, json_value(content)),
+            )
+        preferences = direction["content"].get("visual_preferences") or snapshot.get("visual_preferences") or {}
+        uploaded_logo_id = preferences.get("logo_media_asset_id")
+        if uploaded_logo_id:
+            media = row_dict(connection.execute(
+                "SELECT id FROM media_assets WHERE id = ? AND project_id = ?", (uploaded_logo_id, project_id)
+            ).fetchone())
+            if media:
+                connection.execute(
+                    """INSERT INTO manual_assets
+                       (id, project_id, manual_version_id, kind, media_asset_id, metadata_json, created_at)
+                       VALUES (?, ?, ?, 'logo_mark', ?, ?, ?)""",
+                    (new_id(), project_id, version_id, uploaded_logo_id, json_value({"source": "user_upload"}), timestamp),
+                )
+    return {"manual_version_id": version_id, "content": content, "created": True}
 
 
 def _save_image_asset(project_id: str, version_id: str, kind: str, result: dict[str, str], prompt: str) -> str:
@@ -352,6 +434,35 @@ def _save_image_asset(project_id: str, version_id: str, kind: str, result: dict[
     return asset_id
 
 
+def _generate_manual_asset(task: dict[str, Any]) -> dict[str, Any]:
+    snapshot = json.loads(task["input_snapshot_json"])
+    version_id = str(snapshot.get("manual_version_id") or "")
+    asset_kind = str(snapshot.get("asset_kind") or "")
+    if asset_kind not in {"logo_mark", "extension_pattern", "packaging_key_visual"}:
+        raise ProviderError("invalid_asset_kind", "不支持的品牌视觉资产类型", retriable=False)
+    if not version_id:
+        raise ProviderError("manual_version_required", "缺少品牌手册版本")
+    with connect() as connection:
+        existing = row_dict(connection.execute(
+            "SELECT media_asset_id FROM manual_assets WHERE manual_version_id = ? AND kind = ? ORDER BY created_at DESC LIMIT 1",
+            (version_id, asset_kind),
+        ).fetchone())
+    if existing and existing.get("media_asset_id"):
+        return {"manual_version_id": version_id, "asset_kind": asset_kind, "asset_id": existing["media_asset_id"], "reused": True}
+    route = snapshot["direction"]["content"]
+    prompts = {
+        "logo_mark": f"根据已选定的 Logo 设计方案生成最终 Logo：{route.get('logo_design', '')}。品牌一句话：{route.get('brand_one_liner', '')}。{route.get('positive_prompt', '')}。只生成无文字的 Logo 图形方向，纯色背景，不出现任何字母或汉字。避免：{route.get('negative_prompt', '')}",
+        "extension_pattern": f"根据已选 Logo 设计方案“{route.get('logo_design', '')}”生成可无缝平铺的品牌延展纹样。{route.get('positive_prompt', '')}。不生成文字，不出现功效声明。避免：{route.get('negative_prompt', '')}",
+        "packaging_key_visual": f"根据品牌路线“{route.get('brand_one_liner', '')}”生成农产品包装主视觉概念。{route.get('positive_prompt', '')}。不生成可读文字，不出现功效声明。避免：{route.get('negative_prompt', '')}",
+    }
+    _task_update(task["id"], progress=45)
+    if not provider.live:
+        raise ProviderError("demo_mode", "演示模式不生成图片")
+    asset_id = _save_image_asset(task["project_id"], version_id, asset_kind, provider.generate_image(prompts[asset_kind]), prompts[asset_kind])
+    _task_update(task["id"], progress=90)
+    return {"manual_version_id": version_id, "asset_kind": asset_kind, "asset_id": asset_id}
+
+
 def _generate_manual(task: dict[str, Any]) -> dict[str, Any]:
     snapshot = json.loads(task["input_snapshot_json"])
     previous = json.loads(task.get("result_json") or "{}")
@@ -379,7 +490,9 @@ def _generate_manual(task: dict[str, Any]) -> dict[str, Any]:
                 ),
                 context=snapshot,
             )
-            content = {**_fallback_manual(snapshot), **generated}
+            fallback = _fallback_manual(snapshot)
+            content = {**fallback, **generated, "logo_design": snapshot["direction"]["content"].get("logo_design", fallback["logo_design"])}
+            content["visual_system"] = {**fallback["visual_system"], **(generated.get("visual_system") if isinstance(generated.get("visual_system"), dict) else {}), "logo_direction": content["logo_design"]}
             mode = "live"
         else:
             content = _fallback_manual(snapshot)
@@ -409,6 +522,19 @@ def _generate_manual(task: dict[str, Any]) -> dict[str, Any]:
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (new_id(), task["project_id"], snapshot["direction"]["id"], json_value(content), timestamp, version_id, json_value(content)),
                 )
+            preferences = snapshot["direction"]["content"].get("visual_preferences") or snapshot.get("visual_preferences") or {}
+            uploaded_logo_id = preferences.get("logo_media_asset_id")
+            if uploaded_logo_id:
+                media = row_dict(connection.execute(
+                    "SELECT id FROM media_assets WHERE id = ? AND project_id = ?", (uploaded_logo_id, task["project_id"])
+                ).fetchone())
+                if media:
+                    connection.execute(
+                        """INSERT INTO manual_assets
+                           (id, project_id, manual_version_id, kind, media_asset_id, metadata_json, created_at)
+                           VALUES (?, ?, ?, 'logo_mark', ?, ?, ?)""",
+                        (new_id(), task["project_id"], version_id, uploaded_logo_id, json_value({"source": "user_upload"}), now()),
+                    )
     _task_update(task["id"], progress=55, result={"manual_version_id": version_id, "text_ready": True})
     image_errors: list[dict[str, str]] = []
     with connect() as connection:
@@ -419,7 +545,7 @@ def _generate_manual(task: dict[str, Any]) -> dict[str, Any]:
     asset_ids: list[str] = [item["media_asset_id"] for item in existing_assets]
     route = snapshot["direction"]["content"]
     prompts = {
-        "logo_mark": f"{route.get('positive_prompt', '')}。只生成无文字的Logo图形方向，纯色背景，不出现任何字母或汉字。避免：{route.get('negative_prompt', '')}",
+        "logo_mark": f"根据已选定的 Logo 设计方案生成最终 Logo：{route.get('logo_design', '')}。品牌一句话：{route.get('brand_one_liner', '')}。{route.get('positive_prompt', '')}。只生成无文字的 Logo 图形方向，纯色背景，不出现任何字母或汉字。避免：{route.get('negative_prompt', '')}",
         "packaging_key_visual": f"{route.get('positive_prompt', '')}。农产品包装主视觉概念，不生成可读文字，不出现功效声明。避免：{route.get('negative_prompt', '')}",
         "extension_pattern": f"{route.get('positive_prompt', '')}。可无缝平铺的延展纹样，不生成文字。避免：{route.get('negative_prompt', '')}",
     }
@@ -456,41 +582,97 @@ def _manual_export_snapshot(connection: Any, project_id: str, version_id: str) -
 
 def _build_pdf(snapshot: dict[str, Any], destination: Path) -> None:
     try:
-        from reportlab.lib.enums import TA_LEFT
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.colors import HexColor
+        from reportlab.lib.pagesizes import A4, landscape
         from reportlab.lib.units import mm
         from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-        from reportlab.pdfbase.pdfmetrics import registerFont
-        from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer
+        from reportlab.pdfbase.pdfmetrics import registerFont, stringWidth
+        from reportlab.pdfgen import canvas
     except ImportError as exc:
         raise ProviderError("pdf_dependency_missing", "PDF 生成依赖尚未安装") from exc
     registerFont(UnicodeCIDFont("STSong-Light"))
-    styles = getSampleStyleSheet()
-    title = ParagraphStyle("CJKTitle", parent=styles["Title"], fontName="STSong-Light", fontSize=24, leading=32, textColor="#18372B")
-    heading = ParagraphStyle("CJKHeading", parent=styles["Heading2"], fontName="STSong-Light", fontSize=14, leading=21, textColor="#18372B", spaceBefore=8)
-    body = ParagraphStyle("CJKBody", parent=styles["BodyText"], fontName="STSong-Light", fontSize=10.5, leading=18, alignment=TA_LEFT, textColor="#2C332F")
     content = snapshot["version"]["content"]
-    story: list[Any] = [Paragraph(str(content.get("brand_name") or "品牌视觉手册"), title), Spacer(1, 5 * mm), Paragraph("品牌视觉手册 · 工作版本", body)]
-    sections = [
-        ("品牌简介", content.get("brand_introduction")), ("品牌主张", content.get("slogan")),
-        ("品牌策略", content.get("brand_strategy")), ("故事系统", content.get("story_system")),
-        ("语言系统", content.get("voice")), ("卖点与证据", content.get("selling_points")),
-        ("待补证据", content.get("evidence_gaps")), ("视觉系统", content.get("visual_system")),
-        ("应用建议", content.get("applications")), ("说明", content.get("disclaimer")),
+    palette = content.get("color_palette") if isinstance(content.get("color_palette"), list) else []
+    colors = [str(item) for item in palette if str(item).startswith("#")][:4]
+    colors += ["#18372B", "#2B6173", "#D5A72B", "#F7F1E3"][len(colors):]
+    strategy = content.get("brand_strategy") if isinstance(content.get("brand_strategy"), dict) else {}
+    story_system = content.get("story_system") if isinstance(content.get("story_system"), dict) else {}
+    selling_points = content.get("selling_points") if isinstance(content.get("selling_points"), list) else []
+    while len(selling_points) < 3:
+        selling_points.append({"category": "产品创新", "explanation": "待补充卖点解释"})
+    logo_asset = next((asset for asset in snapshot["assets"] if asset.get("kind") == "logo_mark"), None)
+    logo_path = Path(settings.media_directory) / str(logo_asset.get("storage_key") or "") if logo_asset else None
+    slides = [
+        ("首页", str(content.get("brand_name") or "品牌视觉手册"), "品牌手册", "cover"),
+        ("Logo", "Logo", "品牌识别的核心图形", "logo"),
+        ("字体 / 颜色", str(content.get("font_label") or "思源宋体 / 思源黑体"), "字体与颜色方案", "system"),
+        ("品牌一句话", str(content.get("brand_one_liner") or content.get("slogan") or ""), "一句话说清我们是谁", "text"),
+        ("口号", str(content.get("slogan") or ""), "品牌口号", "text"),
+        ("目标人群 / 场景", str(content.get("target_audience") or strategy.get("audience") or ""), str(content.get("target_scenarios") or "、".join(strategy.get("scenarios", [])) if isinstance(strategy.get("scenarios"), list) else strategy.get("scenarios") or ""), "text"),
+        ("故事主线", str(content.get("story_spine") or story_system.get("main_story") or content.get("brand_introduction") or ""), "一句话品牌故事", "text"),
     ]
-    for name, value in sections:
-        story.extend([Paragraph(name, heading), Paragraph(json.dumps(value, ensure_ascii=False, indent=2).replace("\n", "<br/>"), body), Spacer(1, 3 * mm)])
-    if snapshot["assets"]:
-        story.append(PageBreak())
-        story.append(Paragraph("视觉资产", title))
-        for asset in snapshot["assets"]:
-            path = Path(settings.media_directory) / str(asset.get("storage_key") or "")
-            story.append(Paragraph(str(asset.get("kind") or "视觉资产"), heading))
-            if path.is_file():
-                story.append(Image(str(path), width=150 * mm, height=95 * mm, kind="proportional"))
+    for index, raw in enumerate(selling_points[:3], start=1):
+        point = raw if isinstance(raw, dict) else {"explanation": str(raw)}
+        slides.append((f"卖点 {index}", str(point.get("category") or "产品创新"), str(point.get("explanation") or point.get("text") or ""), "point"))
+
     destination.parent.mkdir(parents=True, exist_ok=True)
-    SimpleDocTemplate(str(destination), pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm).build(story)
+    width, height = landscape(A4)
+    document = canvas.Canvas(str(destination), pagesize=(width, height))
+
+    def wrapped(value: str, font_size: float, max_width: float) -> list[str]:
+        lines, current = [], ""
+        for char in value:
+            candidate = current + char
+            if current and stringWidth(candidate, "STSong-Light", font_size) > max_width:
+                lines.append(current)
+                current = char
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        return lines or [""]
+
+    for page_no, (label, title_text, body_text, kind) in enumerate(slides, start=1):
+        document.setFillColor(HexColor("#FFFDF7"))
+        document.rect(0, 0, width, height, fill=1, stroke=0)
+        document.setFillColor(HexColor(colors[0]))
+        document.rect(0, 0, 8 * mm, height, fill=1, stroke=0)
+        document.setFillColor(HexColor("#6F786F"))
+        document.setFont("STSong-Light", 9)
+        document.drawString(24 * mm, height - 18 * mm, f"{label}  ·  {page_no:02d} / {len(slides):02d}")
+        document.setFillColor(HexColor("#18201D"))
+        document.setFont("STSong-Light", 27 if kind != "cover" else 34)
+        y = height - 42 * mm
+        for line in wrapped(title_text, 27 if kind != "cover" else 34, 156 * mm):
+            document.drawString(24 * mm, y, line)
+            y -= 13 * mm
+        if kind in {"cover", "logo"} and logo_path and logo_path.is_file():
+            document.drawImage(str(logo_path), width - 82 * mm, 48 * mm, width=48 * mm, height=48 * mm, preserveAspectRatio=True, anchor="c", mask="auto")
+        elif kind in {"cover", "logo"}:
+            document.setStrokeColor(HexColor("#BFC7C0"))
+            document.rect(width - 82 * mm, 48 * mm, 48 * mm, 48 * mm, fill=0, stroke=1)
+            document.setFont("STSong-Light", 13)
+            document.drawCentredString(width - 58 * mm, 70 * mm, "LOGO")
+        if kind == "system":
+            for index, color in enumerate(colors):
+                x = 24 * mm + index * 36 * mm
+                document.setFillColor(HexColor(color))
+                document.roundRect(x, 40 * mm, 29 * mm, 29 * mm, 2 * mm, fill=1, stroke=0)
+                document.setFillColor(HexColor("#454D48"))
+                document.setFont("STSong-Light", 8)
+                document.drawString(x, 34 * mm, color.upper())
+        else:
+            document.setFillColor(HexColor(colors[1]))
+            document.setFont("STSong-Light", 15 if kind != "point" else 18)
+            body_y = min(y - 3 * mm, 78 * mm)
+            for line in wrapped(body_text, 15 if kind != "point" else 18, 150 * mm)[:5]:
+                document.drawString(24 * mm, body_y, line)
+                body_y -= 9 * mm
+        document.setFillColor(HexColor("#9A9F9A"))
+        document.setFont("STSong-Light", 8)
+        document.drawRightString(width - 18 * mm, 11 * mm, "贵品风物志 · HTML 品牌手册导出")
+        document.showPage()
+    document.save()
 
 
 def _generate_exports(task: dict[str, Any]) -> dict[str, Any]:
