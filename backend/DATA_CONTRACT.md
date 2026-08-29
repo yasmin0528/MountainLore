@@ -8,8 +8,9 @@ SQLite 默认位于 `data/mountainlore.db`，媒体位于 `data/media`；运行�
 User (optional for anonymous use) → Project → Session / Message / MediaAsset
   → FieldNote → SourceRecord → Claim
   → Candidate → ArchiveCard ↔ Claim
-  → Task(route_generation) → BrandDirection × 2
-  → Task(manual_generation) → BrandManual + ManualVersion + ManualAsset × 3
+  → Task(route_generation) → BrandDirection × 3
+  → select current direction → BrandManual + ManualVersion(text_ready)
+  → Task(logo_generation | manual_asset_generation) → ManualAsset
   → Task(export) → PDF / ZIP
   → immutable ShareSnapshot
 ```
@@ -34,9 +35,9 @@ User (optional for anonymous use) → Project → Session / Message / MediaAsset
 | 采风 | `POST /sessions/{id}/messages` | 结构化笔记、来源、候选事实和不重复的下一问；最多四轮回答 |
 | 采风 | `POST /sessions/{id}/finish` | 结束采风并生成逐张待确认候选卡 |
 | 编志 | `POST /candidates/{id}/confirm|discard` | 确认后建立档案—事实关联；弃用事实不进入下游 |
-| 编志 | `POST /projects/{id}/chronicle/confirm` | 冻结档案与事实快照，幂等启动恰好两版方案任务 |
+| 编志 | `POST /projects/{id}/chronicle/confirm` | 冻结档案与事实快照，幂等启动恰好三条品牌路线任务 |
 | 定调 | `POST /projects/{id}/directions` | 仅用于显式重新生成；创建新版本，不覆盖已选路线 |
-| 定调 | `POST /directions/{id}/select` | 选择路线并启动完整手册生成任务 |
+| 定调 | `POST /directions/{id}/select` | 选择路线后同步创建可编辑文字手册；仅 Logo 在已配置图片服务时异步生成 |
 | 手册 | `GET/PATCH /projects/{id}/brand-manual` | 保存当前编辑；每次保存新增不可变版本 |
 | 资产 | `GET /media/{asset_id}` | 校验项目访客权限后返回上传或生成资产 |
 | 资产 | `POST /projects/{id}/brand-manual/assets/{kind}` | 将用户上传 Logo 等资产持久绑定到当前手册版本 |
@@ -58,9 +59,9 @@ User (optional for anonymous use) → Project → Session / Message / MediaAsset
 
 ## 任务与版本
 
-`tasks` 保存 `input_snapshot`、进度、尝试次数、幂等键、错误码和结果。路线和手册均以冻结输入生成；重新生成创建新版本。手册同时保存原始生成快照、当前编辑内容和不可变版本，切换路线不会覆盖旧版本或用户修改。
+`tasks` 保存 `input_snapshot`、进度、尝试次数、幂等键、错误码和结果。路线以冻结输入生成；选择路线后同步创建手册骨架，重新选择会创建新版本。手册同时保存原始生成快照、当前编辑内容和不可变版本，切换路线不会覆盖旧版本或用户修改。
 
-图像失败时手册任务为 `partial`：文字手册与已完成图片保留，用户可重试未完成阶段。三类手册视觉资产固定为无文字 Logo 图形方向、包装主视觉和延展纹样；免责声明只保存在界面与元数据中。
+图片任务彼此独立：Logo 失败不阻塞手册；包装主视觉和延展纹样按需生成、按资产重试。三类手册视觉资产固定为无文字 Logo 图形方向、包装主视觉和延展纹样；免责声明只保存在界面与元数据中。历史 `manual_generation` 任务只会兼容升级为手册骨架，不再生成图片。
 
 ## 本地验证
 

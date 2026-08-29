@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from binascii import Error as Base64Error
 from pathlib import Path
 from typing import Any, Annotated
 
@@ -625,6 +626,29 @@ def model_launch_copy(context: dict[str, Any], template_type: str, inspiration_t
     return result
 
 
+def persist_preview_image(
+    connection: Any, project_id: str, preview_id: str, image: dict[str, str], prompt: str,
+) -> dict[str, str]:
+    """Store base64 previews behind the existing authenticated media endpoint."""
+    if image.get("kind") != "base64":
+        if image.get("kind") == "url" and image.get("value"):
+            return image
+        raise ProviderError("image_invalid_response", "图片服务没有返回可持久化内容")
+    asset_id = new_id()
+    relative_key = f"{project_id}/generated/preview-{preview_id}.png"
+    image_path = Path(settings.media_directory) / relative_key
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    provider.write_base64_image(image["value"], str(image_path))
+    connection.execute(
+        """INSERT INTO media_assets
+           (id, project_id, storage_key, original_name, mime_type, size_bytes, created_at, kind, metadata_json)
+           VALUES (?, ?, ?, ?, 'image/png', ?, ?, 'generated', ?)""",
+        (asset_id, project_id, relative_key, f"preview-{preview_id}.png", image_path.stat().st_size, now(),
+         json_value({"kind": "generation_preview", "preview_id": preview_id, "prompt": prompt, "disclaimer": "AI generated concept asset"})),
+    )
+    return {"kind": "url", "value": f"/api/media/{asset_id}"}
+
+
 @router.post("/projects/{project_id}/generation-previews")
 def create_generation_preview(project_id: str, payload: GenerationPreviewCreate, visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
     if payload.template_type not in {"peripheral", "xiaohongshu"}:
@@ -641,14 +665,12 @@ def create_generation_preview(project_id: str, payload: GenerationPreviewCreate,
             result = model_launch_copy(context, payload.template_type, payload.inspiration_text)
             prompt = f"中国贵州山地农产品品牌概念图。产品：{context['project']['core_product']}；产地：{context['project']['origin']}；品牌路线：{context['direction'].get('brand_one_liner', '')}；用户灵感：{payload.inspiration_text}。暖纸、靛蓝布面、苔藓绿、明黄标记、地方档案质感、竖版 3:4。不出现疗效或夸张承诺。"
             image = provider.generate_image(prompt)
-            if image["kind"] == "base64":
-                image_path = Path(settings.media_directory) / f"preview-{preview_id}.png"
-                provider.write_base64_image(image["value"], str(image_path))
-                image = {"kind": "local", "value": f"/media/{image_path.name}"}
-            result["image"] = image
+            result["image"] = persist_preview_image(connection, project_id, preview_id, image, prompt)
             status, error_code = "succeeded", None
         except ProviderError as exc:
             status, error_code, result = "failed", exc.code, {"warning": "AI 概念稿，不可直接印刷"}
+        except (Base64Error, OSError, ValueError):
+            status, error_code, result = "failed", "image_storage_failed", {"warning": "AI 概念稿，不可直接印刷"}
         connection.execute(
             "INSERT INTO generation_previews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (preview_id, project_id, payload.template_type, payload.inspiration_text, json_value(context), json_value(result), status, error_code, now(), now()),

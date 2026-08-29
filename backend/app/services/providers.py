@@ -82,16 +82,20 @@ _FIRST_PARTY_WEEKLY_LISTINGS = (
 
 
 def _json_from_content(content: str) -> dict[str, Any]:
+    parsed: Any
     try:
-        return json.loads(content)
+        parsed = json.loads(content)
     except json.JSONDecodeError:
         match = re.search(r"\{[\s\S]*\}", content)
         if not match:
             raise ProviderError("invalid_model_json", "模型没有返回可用的结构化内容")
         try:
-            return json.loads(match.group())
+            parsed = json.loads(match.group())
         except json.JSONDecodeError as exc:
             raise ProviderError("invalid_model_json", "模型返回的结构化内容无法解析") from exc
+    if not isinstance(parsed, dict):
+        raise ProviderError("invalid_model_json", "模型返回的结构化内容必须是 JSON 对象")
+    return parsed
 
 
 def _is_recent_or_unknown(published_at: object) -> bool:
@@ -169,6 +173,7 @@ class CreditsProvider:
             api_key=settings.openai_next_api_key,
             missing_key_message="请先配置 OPENAI_NEXT_API_KEY",
             image_paths=image_paths,
+            json_mode=settings.openai_next_json_mode,
         )
 
     def tide_chat_json(
@@ -185,12 +190,14 @@ class CreditsProvider:
             missing_key_message="请先配置 TIDE_API_KEY",
             temperature=temperature,
             timeout=httpx.Timeout(timeout_seconds) if timeout_seconds else None,
+            json_mode=False,
         )
 
     def _chat_json(
         self, *, model: str, instruction: str, context: dict[str, Any], base_url: str,
         api_key: str, missing_key_message: str, image_paths: list[str] | None = None,
         temperature: float | None = 0.45, timeout: httpx.Timeout | None = None,
+        json_mode: bool = False,
     ) -> dict[str, Any]:
         if not self.live:
             raise ProviderError("demo_mode", "演示模式未调用真实模型")
@@ -217,6 +224,8 @@ class CreditsProvider:
         }
         if temperature is not None:
             payload["temperature"] = temperature
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
         try:
             with httpx.Client(timeout=timeout or self.timeout) as client:
                 response = client.post(
@@ -490,7 +499,7 @@ class CreditsProvider:
     @staticmethod
     def write_base64_image(value: str, destination: str) -> None:
         with open(destination, "wb") as output:
-            output.write(base64.b64decode(value))
+            output.write(base64.b64decode(value, validate=True))
 
 
 provider = CreditsProvider()

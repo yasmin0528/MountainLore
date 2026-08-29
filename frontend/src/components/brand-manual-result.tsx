@@ -59,10 +59,14 @@ async function extractPalette(file: File): Promise<string[]> {
   return [...selected.map((color) => `#${toHex(color[0])}${toHex(color[1])}${toHex(color[2])}`.toUpperCase()), ...DEFAULT_PALETTE].slice(0, 4);
 }
 
-function Progress({ task, onRetry }: { task?: WorkflowTask; onRetry: (id: string) => void }) {
-  const failed = task?.status === "failed";
-  const failureMessage = typeof task?.result?.message === "string" ? task.result.message : task?.error_code === "provider_timeout" ? "模型请求超时，可重试。" : "生成未完成，可重试。";
-  return <section className={`manual-progress-stage${failed ? " is-failed" : ""}`} role="status"><span className="manual-progress-seal">{failed ? "停" : "定"}</span><p className="eyebrow">品牌手册 · {failed ? "生成失败" : "正在整理"}</p><h1>{failed ? "模型超时，可重试" : task?.kind === "route_generation" ? "正在生成三条差异路线" : "正在生成你的品牌手册"}</h1><p>{failed ? failureMessage : "档案事实、路线文字与视觉配置会一起冻结保存。你可以离开这一页，稍后再回来。"}</p>{!failed && <progress value={task?.progress ?? 8} max={100} />}{failed && task && <button className="secondary-button" onClick={() => onRetry(task.id)}>重试生成</button>}</section>;
+function RouteProgress({ task, onRetry }: { task: WorkflowTask; onRetry: (id: string) => void }) {
+  const failed = task.status === "failed";
+  const failureMessage = typeof task.result?.message === "string" ? task.result.message : task.error_code === "provider_timeout" ? "模型请求超时，可重试。" : "生成未完成，可重试。";
+  return <section className={`manual-progress-stage${failed ? " is-failed" : ""}`} role="status"><span className="manual-progress-seal">{failed ? "停" : "定"}</span><p className="eyebrow">品牌路线 · {failed ? "生成失败" : "正在整理"}</p><h1>{failed ? "三条路线未生成完成" : "正在生成三条差异路线"}</h1><p>{failed ? failureMessage : "档案事实与视觉偏好会一起冻结保存。生成完成后，再由你选择其中一条路线。"}</p>{!failed && <progress value={task.progress ?? 8} max={100} />}{failed && <button className="secondary-button" onClick={() => onRetry(task.id)}>重试生成路线</button>}</section>;
+}
+
+function ManualUnavailable({ current, busy, onRefresh, onSelect, onFailure }: { current: Direction; busy: boolean; onRefresh: () => Promise<void>; onSelect: (id: string) => Promise<boolean>; onFailure: (message: string) => void }) {
+  return <section className="manual-progress-stage is-failed" role="alert"><span className="manual-progress-seal">停</span><p className="eyebrow">品牌手册 · 初始化异常</p><h1>路线已选定，但手册尚未就绪</h1><p>这不会影响已选路线。请先刷新；若仍未恢复，可重新确认当前路线来补建可编辑手册。</p><div className="manual-unavailable-actions"><button className="secondary-button" disabled={busy} onClick={() => void onRefresh().catch(() => onFailure("手册刷新失败，请稍后重试。"))}>刷新手册</button><button className="primary-button" disabled={busy} onClick={() => void onSelect(current.id)}>重新确认当前路线</button></div></section>;
 }
 
 function Setup({ workspace, busy, onGenerate, onFailure }: { workspace: Workspace; busy: boolean; onGenerate: (preferences: ManualVisualPreferences) => Promise<void>; onFailure: (message: string) => void }) {
@@ -94,7 +98,7 @@ function RouteCompare({ routes, busy, onSelect, onRegenerate }: { routes: Direct
 function Logo({ asset, brandName }: { asset?: ManualAsset; brandName: string }) { return asset?.url ? <img className="manual-slide-logo" src={asset.url} alt={`${brandName} Logo`} /> : <div className="manual-slide-logo-placeholder"><b>{brandName.slice(0, 1)}</b><small>最终 Logo 待生成</small></div>; }
 function Pattern({ asset }: { asset?: ManualAsset }) { return asset?.url ? <img className="manual-slide-logo" src={asset.url} alt="品牌延展纹样" /> : <div className="manual-slide-logo-placeholder manual-pattern-placeholder"><b>纹</b><small>按需生成延展纹样</small></div>; }
 
-export function BrandManualResult({ workspace, manualTask, logoTask, patternTask, exportTask, demoMode, busy, onGenerate, onSelect, onSave, onRefresh, onRetry, onGenerateAsset, onFailure, onOpenArchive, onNext }: { workspace: Workspace; manualTask?: WorkflowTask; logoTask?: WorkflowTask; patternTask?: WorkflowTask; exportTask?: WorkflowTask; demoMode: boolean; busy: boolean; onGenerate: (preferences: ManualVisualPreferences) => Promise<void>; onSelect: (id: string) => Promise<boolean>; onSave: (content: Content) => Promise<void>; onRefresh: () => Promise<void>; onRetry: (id: string) => void; onGenerateAsset: (kind: "extension_pattern" | "packaging_key_visual") => Promise<void>; onFailure: (message: string) => void; onOpenArchive: () => void; onNext: () => void }) {
+export function BrandManualResult({ workspace, logoTask, patternTask, exportTask, demoMode, busy, onGenerate, onSelect, onSave, onRefresh, onRetry, onGenerateAsset, onFailure, onOpenArchive, onNext }: { workspace: Workspace; logoTask?: WorkflowTask; patternTask?: WorkflowTask; exportTask?: WorkflowTask; demoMode: boolean; busy: boolean; onGenerate: (preferences: ManualVisualPreferences) => Promise<void>; onSelect: (id: string) => Promise<boolean>; onSave: (content: Content) => Promise<void>; onRefresh: () => Promise<void>; onRetry: (id: string) => void; onGenerateAsset: (kind: "extension_pattern" | "packaging_key_visual") => Promise<void>; onFailure: (message: string) => void; onOpenArchive: () => void; onNext: () => void }) {
   const latestVersion = Math.max(0, ...workspace.directions.map((route) => route.version ?? 0));
   const routes = workspace.directions.filter((route) => route.state !== "superseded" && (route.version ?? 0) === latestVersion);
   const current = workspace.directions.find((route) => route.state === "current"); const routeTask = workspace.tasks?.find((task) => task.kind === "route_generation");
@@ -102,10 +106,10 @@ export function BrandManualResult({ workspace, manualTask, logoTask, patternTask
   const logo = [...(workspace.manual_assets ?? [])].reverse().find((asset) => asset.kind === "logo_mark"); const pattern = [...(workspace.manual_assets ?? [])].reverse().find((asset) => asset.kind === "extension_pattern"); const palette = list(draft.color_palette).slice(0, 4); const points = pointList(draft.selling_points);
   const slides = useMemo(() => ["首页", "Logo", "字体 / 颜色", "品牌一句话", "口号", "目标人群 / 场景", "故事主线", "卖点 01", "卖点 02", "卖点 03"], []);
 
-  if (!workspace.manual && !current && routeTask && ["queued", "running", "failed"].includes(routeTask.status)) return <Progress task={routeTask} onRetry={onRetry} />;
+  if (!workspace.manual && !current && routeTask && ["queued", "running", "failed"].includes(routeTask.status)) return <RouteProgress task={routeTask} onRetry={onRetry} />;
   if (!workspace.manual && !current && routes.length >= 3) return <RouteCompare routes={routes.slice(0, 3)} busy={busy} onSelect={onSelect} onRegenerate={() => void onGenerate(((routeContent(routes[0]).visual_preferences ?? { logo_mode: "ai", font_family: FONT_OPTIONS[0].value, font_label: FONT_OPTIONS[0].label, palette: DEFAULT_PALETTE }) as ManualVisualPreferences))} />;
   if (!workspace.manual && !current) return <Setup workspace={workspace} busy={busy} onGenerate={onGenerate} onFailure={onFailure} />;
-  if (!workspace.manual) return <Progress task={manualTask} onRetry={onRetry} />;
+  if (!workspace.manual && current) return <ManualUnavailable current={current} busy={busy} onRefresh={onRefresh} onSelect={onSelect} onFailure={onFailure} />;
 
   function setField(key: string, nextValue: unknown) { setDraft((currentDraft) => ({ ...currentDraft, [key]: nextValue })); }
   function setPoint(index: number, key: keyof SellingPoint, value: string) { const next = pointList(draft.selling_points); next[index] = { ...next[index], [key]: value }; setDraft((currentDraft) => ({ ...currentDraft, selling_points: next })); }

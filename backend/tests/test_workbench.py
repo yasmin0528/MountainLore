@@ -3,9 +3,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.api.routes import workbench as workbench_routes
 from app.core.config import settings
 from app.fieldwork.store import connect, new_id, now
 from app.main import app
+from app.services import workflow
+from app.services.providers import ProviderError, provider
 
 
 def _seed_confirmed_card(client: TestClient) -> tuple[str, str]:
@@ -80,6 +83,32 @@ def test_tide_never_fabricates_results_without_live_provider(tmp_path: Path, mon
         assert response.json()["error"]["code"] == "tide_not_configured"
 
 
+def test_logo_failure_does_not_remove_the_selected_route_manual(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "logo-failure.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    with TestClient(app) as client:
+        project_id, _ = _seed_confirmed_card(client)
+        direction = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"][0]
+        monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+        monkeypatch.setattr(workbench_routes, "submit_task", lambda _task_id: None)
+        selected = client.post(f"/api/directions/{direction['id']}/select").json()["data"]
+        assert selected["task"]["kind"] == "logo_generation"
+        assert selected["manual"]["manual_version_id"]
+
+        def image_failure(*_args: object, **_kwargs: object) -> dict[str, str]:
+            raise ProviderError("image_auth_failed", "图片服务鉴权失败")
+
+        monkeypatch.setattr(provider, "generate_image", image_failure)
+        failed_task = workflow.execute_task(selected["task"]["id"])
+        workspace = client.get(f"/api/projects/{project_id}/workspace").json()["data"]
+
+        assert failed_task["status"] == "failed"
+        assert workspace["manual"]["current_version_id"] == selected["manual"]["manual_version_id"]
+        assert workspace["manual_versions"][0]["status"] == "text_ready"
+        assert workspace["directions"][0]["state"] == "current"
+
+
 def test_generation_preview_is_not_an_archive_record_until_saved(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "preview.db"))
     monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
@@ -100,6 +129,44 @@ def test_generation_preview_is_not_an_archive_record_until_saved(tmp_path: Path,
         saved = client.post(f"/api/generation-previews/{preview_id}/save").json()["data"]
         assert saved["result"]["brief"] == "一份待确认的概念预览"
         assert len(client.get(f"/api/projects/{project_id}/workspace").json()["data"]["generation_jobs"]) == 1
+
+
+def test_generation_preview_rejects_non_object_model_json_without_a_500(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "preview-json.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    with TestClient(app) as client:
+        project_id, _ = _seed_confirmed_card(client)
+        route = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"][0]
+        client.post(f"/api/directions/{route['id']}/select")
+        monkeypatch.setattr(workbench_routes.provider, "chat_json", lambda **_kwargs: [])
+        response = client.post(
+            f"/api/projects/{project_id}/generation-previews",
+            json={"template_type": "peripheral", "inspiration_text": "山地果实的晨间能量"},
+        )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "invalid_model_json"
+
+
+def test_generation_preview_persists_base64_image_as_authenticated_media(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "preview-image.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    with TestClient(app) as client:
+        project_id, _ = _seed_confirmed_card(client)
+        route = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"][0]
+        client.post(f"/api/directions/{route['id']}/select")
+        monkeypatch.setattr(workbench_routes.provider, "chat_json", lambda **_kwargs: {"brief": "可审核的概念稿"})
+        monkeypatch.setattr(workbench_routes.provider, "generate_image", lambda _prompt: {"kind": "base64", "value": "aW1hZ2UtYnl0ZXM="})
+        preview = client.post(
+            f"/api/projects/{project_id}/generation-previews",
+            json={"template_type": "peripheral", "inspiration_text": "山地果实的晨间能量"},
+        )
+        assert preview.status_code == 200
+        image_url = preview.json()["data"]["result"]["image"]["value"]
+        image = client.get(image_url)
+    assert image.status_code == 200
+    assert image.content == b"image-bytes"
 
 
 def test_generation_requires_active_archives_and_keeps_project_context_isolated(tmp_path: Path, monkeypatch) -> None:

@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     openai_next_base_url: str = "https://api.openai-next.com/v1"
     openai_next_api_key: str = ""
     openai_next_text_model: str = "gpt-5.5"
+    # OpenAI-compatible gateways may still opt out with
+    # OPENAI_NEXT_JSON_MODE=false, but structured output is required for all
+    # synchronous text-generation flows by default.
+    openai_next_json_mode: bool = True
     openai_next_tide_model: str = "sonar"
     tide_api_base_url: str = "https://api.openai-next.com/v1"
     tide_api_key: str = ""

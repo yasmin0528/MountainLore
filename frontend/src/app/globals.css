@@ -186,3 +186,20 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 .auth-tabs button{min-height:36px;padding:8px 13px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted,#706d63);cursor:pointer;font-weight:600}.auth-tabs button.is-active{border-bottom-color:var(--forest,#405746);color:var(--forest,#405746)}
 .auth-dialog form{display:grid;gap:14px}.auth-dialog label{display:grid;gap:7px;font-size:14px;font-weight:600}.auth-dialog input{width:100%;min-height:42px;padding:10px 12px;border:1px solid var(--border,#c9c0af);border-radius:6px;background:var(--paper-elevated,#faf7ef);color:var(--ink,#272923);font:inherit}.auth-dialog input:focus{border-color:var(--forest,#405746);outline:3px solid color-mix(in srgb,var(--forest,#405746) 22%,transparent)}.auth-dialog label small{color:var(--muted,#706d63);font-size:12px;font-weight:400}.auth-dialog footer{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
 @media(max-width:767px){.account-summary{margin:18px 0 0;border-top-color:rgba(255,253,247,.28)}.auth-dialog{width:calc(100vw - 24px);padding:23px 20px}.auth-dialog footer{align-items:stretch;flex-direction:column-reverse}.auth-dialog footer button{width:100%}}
+/* Brand project deletion follows the archive's paper-and-ink language; rose marks the irreversible action. */
+.delete-project-backdrop{background:rgba(34,43,38,.52)}
+.delete-project-dialog{position:relative;display:grid;gap:14px;width:min(440px,calc(100vw - 32px));padding:26px 28px 22px;border:1px solid var(--border);border-radius:4px;background:var(--paper-high);box-shadow:9px 10px 0 rgba(40,52,45,.2);color:var(--ink)}
+.delete-project-dialog>header{padding-right:42px}
+.delete-project-dialog h2{margin:6px 0 0;font-family:var(--font-display),serif;font-size:23px;line-height:1.4;letter-spacing:-.02em}
+.delete-project-dialog>p:not(.delete-project-note){margin:0;color:var(--body);font-size:14px;line-height:1.75}
+.delete-project-dialog>p b{color:var(--rose-deep);font-weight:600}
+.delete-project-dialog .modal-close{position:absolute;top:20px;right:20px;width:34px;height:34px;border-color:var(--border-soft);background:transparent;font-size:26px;line-height:1}
+.delete-project-note{display:flex;gap:9px;align-items:flex-start;margin:0;padding:11px 13px;border:1px solid #e4b6ac;background:var(--rose-soft);color:var(--rose-deep);font-size:12px;line-height:1.6}
+.delete-project-note i{flex:0 0 auto;display:grid;place-items:center;width:17px;height:17px;margin-top:2px;border-radius:50%;background:var(--rose);color:#fffaf2;font:700 11px/1 var(--font-sans),sans-serif;font-style:normal}
+.delete-project-dialog>footer{display:flex;justify-content:flex-end;gap:10px}
+.delete-project-confirm{min-height:44px;padding:10px 18px;border:1px solid var(--rose-deep);border-radius:8px;background:var(--rose);color:#fffaf2;font:600 14px var(--font-sans),sans-serif;cursor:pointer;transition:background .16s ease-out,border-color .16s ease-out,transform .16s ease-out}
+.delete-project-confirm:hover:not(:disabled){background:var(--rose-deep)}
+.delete-project-confirm:active:not(:disabled){transform:translateY(1px)}
+.delete-project-confirm:focus-visible{outline:3px solid color-mix(in srgb,var(--rose) 30%,transparent);outline-offset:2px}
+.delete-project-confirm:disabled{background:var(--paper-muted);border-color:var(--border-soft);color:var(--muted);cursor:not-allowed}
+@media(max-width:620px){.delete-project-dialog{width:calc(100vw - 24px);padding:22px 20px 18px}.delete-project-dialog>footer{flex-direction:column-reverse;align-items:stretch}.delete-project-dialog>footer button{width:100%}}
