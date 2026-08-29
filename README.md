@@ -253,6 +253,7 @@ npm run dev
 | 变量 | 用途 |
 |---|---|
 | `OPENAI_NEXT_BASE_URL` / `OPENAI_NEXT_API_KEY` / `OPENAI_NEXT_TEXT_MODEL` | 采风、编志、定调、手册与视觉理解的文本模型 |
+| `OPENAI_NEXT_JSON_MODE` | 文本模型的 JSON 对象约束，默认 `true`；仅在兼容网关明确不支持 `response_format` 时设为 `false` |
 | `OPENAI_NEXT_IMAGE_BASE_URL` / `OPENAI_NEXT_IMAGE_API_KEY` / `OPENAI_NEXT_IMAGE_MODEL` | 图片生成（默认 StepFun，竖版 3:4） |
 | `TIDE_API_KEY` / `TAVILY_API_KEY` / `TIDE_SEARCH_PROVIDER` | 观潮周报的检索与综合（Sonar + Tavily） |
 | `TIDE_REFRESH_INTERVAL_SECONDS` | 观潮周报后台刷新间隔 |
