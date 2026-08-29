@@ -32,8 +32,8 @@ type Screen = "setup" | "interview" | "candidates" | "project-directory" | "arch
 type SetupForm = { brand_name: string; industry: string; core_product: string; origin: string; category: string; consent: boolean };
 const productOptions = ["刺梨", "酸汤", "辣椒", "贵州茶", "抹茶", "蓝莓", "猕猴桃", "自定义"];
 const stickerByProduct: Record<string, string> = { 刺梨: "sticker-cili.png", 酸汤: "sticker-sour-soup.png", 辣椒: "sticker-chili.png", 贵州茶: "sticker-tea.png", 抹茶: "sticker-matcha.png", 蓝莓: "sticker-blueberry.png", 猕猴桃: "sticker-kiwi.png", 自定义: "sticker-custom.png" };
-const primaryScreens: Array<{ key: "fieldwork" | "tide" | "launch"; label: string; number: string }> = [
-  { key: "fieldwork", label: "采风", number: "01" }, { key: "tide", label: "观潮", number: "02" }, { key: "launch", label: "出山", number: "03" },
+const primaryScreens: Array<{ key: "fieldwork" | "tide" | "launch"; label: string; number: string; icon: string }> = [
+  { key: "fieldwork", label: "采风", number: "01", icon: "⌁" }, { key: "tide", label: "观潮", number: "02", icon: "≈" }, { key: "launch", label: "出山", number: "03", icon: "↗" },
 ];
 const mobileScreenTitles: Record<Screen, string> = {
   setup: "采风", interview: "采风", candidates: "采风", chronicle: "采风", directions: "采风", manual: "品牌手册",
@@ -393,18 +393,18 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const isPrimaryActive = (key: "fieldwork" | "tide" | "launch") => key === "fieldwork"
     ? ["setup", "interview", "candidates", "chronicle", "directions", "manual"].includes(screen)
     : screen === key;
-  const projectMark = project?.brand_name.trim().slice(0, 1) || "档";
+
   return <div className="app-shell">
     {mobileNavOpen && <button type="button" className="mobile-nav-scrim" aria-label="关闭导航菜单" onClick={() => closeMobileNav()} />}
     <aside ref={mobileDrawerRef} id="mobile-workspace-navigation" className={`sidebar ${mobileNavOpen ? "is-mobile-open" : ""}`} aria-label="品牌工作台导航">
       <div className="mobile-drawer-head">
-        <button type="button" className="mobile-drawer-mark" aria-label="收起导航菜单" onClick={() => closeMobileNav()}>{projectMark}</button>
-        <div><span>当前项目</span><strong>{project?.brand_name ?? "品牌项目目录"}</strong></div>
+        <button type="button" className="mobile-drawer-mark" aria-label="收起导航菜单" onClick={() => closeMobileNav()}>贵</button>
+        <div><span>数字田野志</span><strong>贵品风物志</strong></div>
       </div>
       <div className="brand-lockup"><span>贵品</span><div><strong>贵品风物志</strong></div></div><p className="sidebar-label">品牌工作台</p>
       <nav aria-label="主导航">
-        {primaryScreens.map((item) => <button key={item.key} className={`stage ${isPrimaryActive(item.key) ? "stage-current" : ""}`} onClick={() => item.key === "fieldwork" ? openFieldwork() : navigate(item.key)}><b>{item.number}</b><span>{item.label}</span></button>)}
-        <button type="button" className={`stage mobile-archive-stage ${["project-directory", "archive", "assets"].includes(screen) ? "stage-current" : ""}`} onClick={() => navigate("project-directory")}><b>04</b><span>档案</span></button>
+        {primaryScreens.map((item) => <button key={item.key} className={`stage ${isPrimaryActive(item.key) ? "stage-current" : ""}`} onClick={() => item.key === "fieldwork" ? openFieldwork() : navigate(item.key)}><span className="stage-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span></button>)}
+        <button type="button" className={`stage mobile-archive-stage ${["project-directory", "archive", "assets"].includes(screen) ? "stage-current" : ""}`} onClick={() => navigate("project-directory")}><span className="stage-icon" aria-hidden="true">▱</span><span>档案</span></button>
       </nav>
       <div className="sidebar-spacer" />
       <section className="account-summary" aria-label="账号">
@@ -412,7 +412,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       </section>
       <button className={`project-chip ${["project-directory", "archive", "assets"].includes(screen) ? "archive-current" : ""}`} onClick={() => navigate("project-directory")}><i aria-hidden="true" /><span>档案</span><small>{project?.brand_name ?? "品牌项目目录"}</small></button>
     </aside>
-    <main className="workspace"><header className="mobile-workspace-bar"><button ref={mobileNavTriggerRef} type="button" className="mobile-project-mark" aria-label={mobileNavOpen ? "收起导航菜单" : "打开导航菜单"} aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => mobileNavOpen ? closeMobileNav() : setMobileNavOpen(true)}>{projectMark}</button><span>{mobileScreenTitles[screen]}</span></header>{demoMode && <aside className="demo-banner" role="status"><span>{demoReason ? `真实后端暂不可用（${demoReason}），已载入演示数据。` : "演示数据模式：档案、观潮来源与出山结果均为模拟内容，仅供检查页面和交互。"}</span><button className="text-button" onClick={() => window.location.reload()}>重试真实服务</button></aside>}
+    <main className="workspace"><header className="mobile-workspace-bar"><button ref={mobileNavTriggerRef} type="button" className="mobile-project-mark" aria-label={mobileNavOpen ? "收起导航菜单" : "打开导航菜单"} aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => mobileNavOpen ? closeMobileNav() : setMobileNavOpen(true)}>贵</button><div className="mobile-workspace-title"><strong>贵品风物志</strong><small>{mobileScreenTitles[screen]}</small></div></header>{demoMode && <aside className="demo-banner" role="status"><span>{demoReason ? `真实后端暂不可用（${demoReason}），已载入演示数据。` : "演示数据模式：档案、观潮来源与出山结果均为模拟内容，仅供检查页面和交互。"}</span><button className="text-button" onClick={() => window.location.reload()}>重试真实服务</button></aside>}
       {screen === "setup" && <Setup form={form} setForm={setForm} busy={busy} onSubmit={start} onDemo={loadDemoWorkspace} />}
       {screen === "interview" && project && session && <Interview project={project} session={session} answer={answer} setAnswer={setAnswer} uploads={uploads} busy={busy} onFiles={uploadFiles} onSend={sendMessage} onFinish={finishFieldwork} />}
       {screen === "candidates" && <Candidates candidates={candidates} confirmed={confirmedCount} busy={busy} onResolve={resolveCandidate} onContinue={confirmChronicle} />}

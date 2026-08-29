@@ -149,15 +149,17 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
   body.mobile-nav-open{overflow:hidden;touch-action:none}
   .app-shell{display:block;min-height:100dvh}
   .mobile-nav-scrim{position:fixed;z-index:70;inset:0;display:block;width:100%;height:100%;border:0;background:rgba(25,35,31,.48);cursor:default}
-  .sidebar{position:fixed!important;z-index:80;top:0;bottom:0;left:0;width:min(280px,calc(100vw - 44px));height:100dvh;min-height:100dvh;padding:17px 16px 24px;overflow-x:hidden;overflow-y:auto;border:0;box-shadow:8px 0 0 rgba(15,39,50,.22);transform:translateX(-104%);transition:transform .2s ease-out}
+  .sidebar{position:fixed!important;z-index:80;top:0;bottom:0;left:0;width:36vw;min-width:0;max-width:none;height:100dvh;min-height:100dvh;padding:16px 10px 16px;overflow:hidden;border:0;background-color:#103b4d;background-image:url("/guipin/assets/indigo-mountain-batik-mobile-v1.png");background-size:cover;background-position:center;background-repeat:no-repeat;box-shadow:8px 0 0 rgba(15,39,50,.22);transform:translateX(-104%);transition:transform .2s ease-out}
   .sidebar.is-mobile-open{transform:translateX(0)}
-  .mobile-drawer-head{display:flex;align-items:center;gap:11px;min-width:0;padding:0 0 17px;border-bottom:1px solid rgba(255,253,247,.28)}
-  .mobile-drawer-mark,.mobile-project-mark{display:grid;place-items:center;flex:0 0 44px;width:44px;height:44px;padding:0;border:1px solid var(--ochre);border-radius:50%;background:var(--paper-high);color:var(--indigo);font:600 16px/1 "Noto Serif SC",STSong,serif}
-  .mobile-drawer-head>div{display:grid;min-width:0;gap:2px}.mobile-drawer-head span{color:rgba(255,253,247,.72);font-size:10px;letter-spacing:.08em}.mobile-drawer-head strong{overflow:hidden;color:var(--paper-high);font:500 15px/1.4 "Noto Serif SC",STSong,serif;text-overflow:ellipsis;white-space:nowrap}
+
+  .mobile-drawer-head{display:flex;align-items:center;gap:8px;min-width:0;padding:0 0 15px;border-bottom:1px solid rgba(255,253,247,.28)}
+  .mobile-drawer-mark,.mobile-project-mark{display:grid;place-items:center;flex:0 0 36px;width:36px;height:36px;padding:0;border:1px solid rgba(247,241,224,.82);border-radius:50%;background:transparent;color:var(--paper-high);font:600 15px/1 "Noto Serif SC",STSong,serif}
+  .mobile-drawer-head>div{display:grid;min-width:0;gap:1px}.mobile-drawer-head span{color:rgba(255,253,247,.66);font-size:9px;letter-spacing:.06em}.mobile-drawer-head strong{overflow:hidden;color:var(--paper-high);font:500 14px/1.35 "Noto Serif SC",STSong,serif;text-overflow:ellipsis;white-space:nowrap}
   .sidebar .brand-lockup,.sidebar .sidebar-label{display:none}
-  .sidebar nav{display:grid!important;grid-template-columns:1fr!important;gap:12px!important;margin-top:20px}
-  .sidebar .stage,.sidebar .mobile-archive-stage{display:flex!important;align-items:center;min-height:52px;padding:10px 12px;border:0;background:rgba(255,253,247,.96);box-shadow:3px 3px 0 rgba(241,200,75,.7);color:var(--ink);font-size:15px;text-align:left}
-  .sidebar .stage b{min-width:26px;color:var(--indigo);font-size:11px}.sidebar .stage-current{background:var(--paper-high);box-shadow:3px 3px 0 var(--ochre);color:var(--indigo)}
+  .sidebar nav{display:flex!important;flex:1;flex-direction:column;gap:0!important;margin-top:14px}
+  .sidebar .stage,.sidebar .mobile-archive-stage{display:flex!important;align-items:center;gap:10px;min-height:49px;padding:9px 3px;border:0;border-bottom:1px solid rgba(255,253,247,.24);background:transparent;box-shadow:none;color:rgba(250,247,239,.72);font-size:14px;text-align:left}
+  .sidebar .stage-icon{display:grid;place-items:center;flex:0 0 22px;width:22px;height:22px;color:rgba(250,247,239,.74);font:500 18px/1 Georgia,serif}.sidebar .stage-current{background:transparent;box-shadow:none;color:var(--paper-high)}.sidebar .stage-current .stage-icon{color:#f0d391}
+  .sidebar .mobile-archive-stage{margin-top:auto;border-top:1px solid rgba(255,253,247,.24);border-bottom:0;color:rgba(250,247,239,.84)}
   .sidebar-spacer,.sidebar .project-chip{display:none!important}
   .mobile-workspace-bar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:11px;height:62px;margin:0 -16px 20px;padding:9px 16px;border-bottom:1px solid var(--border-soft);background:var(--paper)}
   .mobile-workspace-bar>span{min-width:0;overflow:hidden;color:var(--indigo);font:500 17px/1.3 "Noto Serif SC",STSong,serif;letter-spacing:.03em;text-overflow:ellipsis;white-space:nowrap}
