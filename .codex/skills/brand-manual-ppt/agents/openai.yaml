@@ -1,0 +1,4 @@
+interface:
+  display_name: "品牌手册 PPT"
+  short_description: "生成证据受控、内容完整、版式统一的品牌手册演示文稿"
+  default_prompt: "请基于已确认的品牌档案，生成一套符合项目规范的品牌手册 PPT。"

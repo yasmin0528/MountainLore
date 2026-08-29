@@ -10,7 +10,7 @@ import { FailureToast } from "@/components/failure-toast";
 
 export type Project = { id: string; brand_name: string; industry: string; core_product: string; origin: string; current_stage?: string; current_direction_id?: string; status?: string };
 type Account = { id: string; email: string; created_at: string };
-type Session = { id: string; status: string; started_at: string; field_notes: Note[]; messages: Message[] };
+type Session = { id: string; status: string; started_at: string; field_notes: Note[]; messages: Message[]; ready_to_finish?: boolean };
 type Message = { id: string; role: "assistant" | "user" | "system"; content: string };
 type Note = { id: string; type: string; title: string; summary: string; sequence: number };
 type Candidate = { id: string; type: string; title: string; content: string; status: string };
@@ -32,8 +32,8 @@ type Screen = "setup" | "interview" | "candidates" | "project-directory" | "arch
 type SetupForm = { brand_name: string; industry: string; core_product: string; origin: string; category: string; consent: boolean };
 const productOptions = ["刺梨", "酸汤", "辣椒", "贵州茶", "抹茶", "蓝莓", "猕猴桃", "自定义"];
 const stickerByProduct: Record<string, string> = { 刺梨: "sticker-cili.png", 酸汤: "sticker-sour-soup.png", 辣椒: "sticker-chili.png", 贵州茶: "sticker-tea.png", 抹茶: "sticker-matcha.png", 蓝莓: "sticker-blueberry.png", 猕猴桃: "sticker-kiwi.png", 自定义: "sticker-custom.png" };
-const primaryScreens: Array<{ key: "fieldwork" | "tide" | "launch"; label: string; number: string }> = [
-  { key: "fieldwork", label: "采风", number: "01" }, { key: "tide", label: "观潮", number: "02" }, { key: "launch", label: "出山", number: "03" },
+const primaryScreens: Array<{ key: "fieldwork" | "tide" | "launch"; label: string; number: string; icon: string }> = [
+  { key: "fieldwork", label: "采风", number: "01", icon: "⌁" }, { key: "tide", label: "观潮", number: "02", icon: "≈" }, { key: "launch", label: "出山", number: "03", icon: "↗" },
 ];
 const mobileScreenTitles: Record<Screen, string> = {
   setup: "采风", interview: "采风", candidates: "采风", chronicle: "采风", directions: "采风", manual: "品牌手册",
@@ -77,6 +77,7 @@ const DEMO_WORKSPACE: Workspace = {
 };
 
 function createDemoWorkspace(): Workspace { return structuredClone(DEMO_WORKSPACE); }
+const DEMO_FIELDWORK_SESSION: Session = { id: "demo-fieldwork", status: "active", started_at: "2026-08-29T09:20:00Z", ready_to_finish: true, field_notes: [{ id: "demo-note-1", type: "BRAND", title: "合作社从一片坡地开始", summary: "以人工采收和当天分拣为主，仍待确认后入档。", sequence: 1 }], messages: [{ id: "demo-message-1", role: "assistant", content: "从这份品牌的来处讲起：最初是谁、因为什么开始做这件事？" }, { id: "demo-message-2", role: "user", content: "果园在山坡上，最早是几户人家一起种下的。" }, { id: "demo-message-3", role: "system", content: "已整理 1 条采风笔记，待确认。" }, { id: "demo-message-4", role: "assistant", content: "产品从采收或原料到成品，哪一个环节最能说明你们是怎么做的？" }, { id: "demo-message-5", role: "user", content: "果子成熟当天采下，当天就完成分拣。" }, { id: "demo-message-6", role: "assistant", content: "这一轮已经收集到几段可继续整理的材料。你可以结束本次采风，逐张确认候选档案。" }] };
 function demoProjects(): Project[] { const base = createDemoWorkspace().project; return [base, { id: "demo-tea", brand_name: "都匀云雾茶 · 试验档", industry: "贵州茶", core_product: "云雾绿茶", origin: "贵州都匀", current_stage: "archive" }, { id: "demo-chili", brand_name: "黔北糟辣椒合作社", industry: "糟辣椒", core_product: "糟辣椒", origin: "贵州遵义", current_stage: "archive" }, { id: "demo-soup", brand_name: "凯里酸汤小作坊", industry: "酸汤", core_product: "红酸汤", origin: "贵州凯里", current_stage: "archive" }]; }
 
 function errorText(error: unknown) {
@@ -93,10 +94,10 @@ function cardContent(direction: Direction): Record<string, unknown> {
 }
 function stringList(value: unknown) { return Array.isArray(value) ? value.map(String) : []; }
 
-export default function WorkbenchApp({ initialDemo = false, initialScreen = "archive", initialManual = false, initialDirectionDraft = false }: { initialDemo?: boolean; initialScreen?: Screen; initialManual?: boolean; initialDirectionDraft?: boolean }) {
+export default function WorkbenchApp({ initialDemo = false, initialScreen = "archive", initialManual = false, initialDirectionDraft = false, initialFieldwork = false }: { initialDemo?: boolean; initialScreen?: Screen; initialManual?: boolean; initialDirectionDraft?: boolean; initialFieldwork?: boolean }) {
   const [demoSeed] = useState<Workspace | null>(() => initialDemo ? createDemoWorkspace() : null);
   const [project, setProject] = useState<Project | null>(() => demoSeed?.project ?? null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<Session | null>(() => initialFieldwork ? structuredClone(DEMO_FIELDWORK_SESSION) : null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(() => demoSeed);
   const [projectDirectory, setProjectDirectory] = useState<Project[]>(() => initialDemo ? demoProjects() : []);
@@ -151,6 +152,17 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     }).catch(loadDemoWorkspace);
   }, [initialDemo]);
 
+
+  useEffect(() => {
+    if (!initialDemo || !initialFieldwork) return;
+    const demo = createDemoWorkspace();
+    setProject(demo.project);
+    setWorkspace(demo);
+    setProjectDirectory(demoProjects());
+    setSession(structuredClone(DEMO_FIELDWORK_SESSION));
+    setCandidates([]);
+    setScreen("interview");
+  }, [initialDemo, initialFieldwork]);
   useEffect(() => {
     if (!mobileNavOpen) return;
     const drawer = mobileDrawerRef.current;
@@ -301,6 +313,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   }
 
   async function finishFieldwork() {
+    if (demoMode) { setCandidates([{ id: "demo-candidate-1", type: "BRAND", title: "品牌的来处", content: "果园从几户人家共同种下的一片山坡开始。", status: "pending" }, { id: "demo-candidate-2", type: "PROCESS", title: "当天采收与分拣", content: "果实成熟当天采收，并在当天完成分拣。", status: "pending" }]); setSession((current) => current ? { ...current, status: "completed" } : current); setScreen("candidates"); return; }
     if (!session || !project) return;
     setBusy(true); setError(null);
     try {
@@ -392,18 +405,18 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const isPrimaryActive = (key: "fieldwork" | "tide" | "launch") => key === "fieldwork"
     ? ["setup", "interview", "candidates", "chronicle", "directions", "manual"].includes(screen)
     : screen === key;
-  const projectMark = project?.brand_name.trim().slice(0, 1) || "档";
+
   return <div className="app-shell">
     {mobileNavOpen && <button type="button" className="mobile-nav-scrim" aria-label="关闭导航菜单" onClick={() => closeMobileNav()} />}
     <aside ref={mobileDrawerRef} id="mobile-workspace-navigation" className={`sidebar ${mobileNavOpen ? "is-mobile-open" : ""}`} aria-label="品牌工作台导航">
       <div className="mobile-drawer-head">
-        <button type="button" className="mobile-drawer-mark" aria-label="收起导航菜单" onClick={() => closeMobileNav()}>{projectMark}</button>
-        <div><span>当前项目</span><strong>{project?.brand_name ?? "品牌项目目录"}</strong></div>
+        <button type="button" className="mobile-drawer-mark" aria-label="收起导航菜单" onClick={() => closeMobileNav()}>贵</button>
+        <div><span>数字田野志</span><strong>贵品风物志</strong></div>
       </div>
       <div className="brand-lockup"><span>贵品</span><div><strong>贵品风物志</strong></div></div><p className="sidebar-label">品牌工作台</p>
       <nav aria-label="主导航">
-        {primaryScreens.map((item) => <button key={item.key} className={`stage ${isPrimaryActive(item.key) ? "stage-current" : ""}`} onClick={() => item.key === "fieldwork" ? openFieldwork() : navigate(item.key)}><b>{item.number}</b><span>{item.label}</span></button>)}
-        <button type="button" className={`stage mobile-archive-stage ${["project-directory", "archive", "assets"].includes(screen) ? "stage-current" : ""}`} onClick={() => navigate("project-directory")}><b>04</b><span>档案</span></button>
+        {primaryScreens.map((item) => <button key={item.key} className={`stage ${isPrimaryActive(item.key) ? "stage-current" : ""}`} onClick={() => item.key === "fieldwork" ? openFieldwork() : navigate(item.key)}><span className="stage-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span></button>)}
+        <button type="button" className={`stage mobile-archive-stage ${["project-directory", "archive", "assets"].includes(screen) ? "stage-current" : ""}`} onClick={() => navigate("project-directory")}><span className="stage-icon" aria-hidden="true">▱</span><span>档案</span></button>
       </nav>
       <div className="sidebar-spacer" />
       <section className="account-summary" aria-label="账号">
@@ -411,7 +424,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       </section>
       <button className={`project-chip ${["project-directory", "archive", "assets"].includes(screen) ? "archive-current" : ""}`} onClick={() => navigate("project-directory")}><i aria-hidden="true" /><span>档案</span><small>{project?.brand_name ?? "品牌项目目录"}</small></button>
     </aside>
-    <main className="workspace"><header className="mobile-workspace-bar"><button ref={mobileNavTriggerRef} type="button" className="mobile-project-mark" aria-label={mobileNavOpen ? "收起导航菜单" : "打开导航菜单"} aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => mobileNavOpen ? closeMobileNav() : setMobileNavOpen(true)}>{projectMark}</button><span>{mobileScreenTitles[screen]}</span></header>{demoMode && <aside className="demo-banner" role="status"><span>{demoReason ? `真实后端暂不可用（${demoReason}），已载入演示数据。` : "演示数据模式：档案、观潮来源与出山结果均为模拟内容，仅供检查页面和交互。"}</span><button className="text-button" onClick={() => window.location.reload()}>重试真实服务</button></aside>}
+    <main className="workspace"><header className="mobile-workspace-bar"><button ref={mobileNavTriggerRef} type="button" className="mobile-project-mark" aria-label={mobileNavOpen ? "收起导航菜单" : "打开导航菜单"} aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => mobileNavOpen ? closeMobileNav() : setMobileNavOpen(true)}>贵</button><div className="mobile-workspace-title"><strong>贵品风物志</strong><small>{mobileScreenTitles[screen]}</small></div></header>{demoMode && <aside className="demo-banner" role="status"><span>{demoReason ? `真实后端暂不可用（${demoReason}），已载入演示数据。` : "演示数据模式：档案、观潮来源与出山结果均为模拟内容，仅供检查页面和交互。"}</span><button className="text-button" onClick={() => window.location.reload()}>重试真实服务</button></aside>}
       {screen === "setup" && <Setup form={form} setForm={setForm} busy={busy} onSubmit={start} onDemo={loadDemoWorkspace} />}
       {screen === "interview" && project && session && <Interview project={project} session={session} answer={answer} setAnswer={setAnswer} uploads={uploads} busy={busy} onFiles={uploadFiles} onSend={sendMessage} onFinish={finishFieldwork} />}
       {screen === "candidates" && <Candidates candidates={candidates} confirmed={confirmedCount} busy={busy} onResolve={resolveCandidate} onContinue={confirmChronicle} />}
@@ -469,8 +482,8 @@ function Setup({ form, setForm, busy, onSubmit, onDemo }: { form: SetupForm; set
 }
 
 function Interview({ project, session, answer, setAnswer, uploads, busy, onFiles, onSend, onFinish }: { project: Project; session: Session; answer: string; setAnswer: (value: string) => void; uploads: Array<{ id: string; file: File; status: string; error?: string }>; busy: boolean; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onSend: (skip?: boolean) => void; onFinish: () => void }) {
-  const readyToFinish = session.messages.filter((message) => message.role === "user").length >= 3;
-  return <><header className="interview-header"><div><p className="eyebrow">FIELD INTERVIEW</p><h1>{project.core_product}</h1><p>{project.origin} · 已自动保存</p></div><button className="secondary-button" onClick={onFinish} disabled={busy || session.field_notes.length === 0}>结束本次采风</button></header><div className="interview-layout"><section className="transcript"><div className="transcript-head"><div><p className="eyebrow">对话记录</p><h2>从真实经历开始</h2></div><span>{session.field_notes.length} 条笔记</span></div><div className="transcript-list">{session.messages.map((message) => <article className={`turn turn-${message.role}`} key={message.id}><p className="turn-meta">{message.role === "assistant" ? "调查员" : message.role === "user" ? "受访者" : "系统"}</p><p>{message.content}</p></article>)}</div><section className="composer">{readyToFinish && <p className="composer-complete" role="status">本轮采风已收束，请结束采风并确认候选档案。</p>}<label htmlFor="fieldwork-answer">你的回答 <small>一次只需说一件真实的事</small></label><textarea id="fieldwork-answer" value={answer} maxLength={2000} disabled={readyToFinish} onChange={(event) => setAnswer(event.target.value)} placeholder="可以从一个人、一件事，或一个产品细节开始。" /><div className="composer-footer"><div><label className="upload-button"><input type="file" accept="image/*" multiple disabled={readyToFinish} onChange={onFiles} />添加照片</label><span>{answer.length} / 2,000</span></div><div><button className="text-button" onClick={() => onSend(true)} disabled={busy || readyToFinish}>跳过</button><button className="primary-button" onClick={() => onSend()} disabled={busy || readyToFinish}>{busy ? "正在整理…" : "记录并继续"}</button></div></div>{uploads.map((item) => <div className="upload-item" key={item.id}><span>{item.file.name}<small>{item.status === "ready" ? "已保存" : item.status === "failed" ? item.error : "正在上传"}</small></span></div>)}</section></section><aside className="notes-panel"><header><p className="eyebrow">FIELD NOTES</p><h2>本次采风笔记</h2></header>{session.field_notes.length ? <div className="note-stack">{session.field_notes.map((note) => <article className="sticky-note" key={note.id}><p>FIELD NOTE {String(note.sequence).padStart(2, "0")}</p><h3>{note.title}</h3><p>{note.summary}</p><small>待确认</small></article>)}</div> : <p className="notes-empty">第一张笔记会在这里出现。</p>}</aside></div></>;
+  const readyToFinish = Boolean(session.ready_to_finish);
+  return <><header className="interview-header"><div><p className="eyebrow">FIELD INTERVIEW</p><h1>{project.core_product}</h1><p>{project.origin} · 已自动保存</p></div></header><div className="interview-layout"><section className="transcript"><div className="transcript-head"><div><p className="eyebrow">对话记录</p><h2>从真实经历开始</h2></div><span>{session.field_notes.length} 条笔记</span></div><div className="transcript-list">{session.messages.map((message, index) => { const isFinishPrompt = readyToFinish && message.role === "assistant" && index === session.messages.length - 1; return <article className={`turn turn-${message.role}`} key={message.id}><p className="turn-meta">{message.role === "assistant" ? "调查员" : message.role === "user" ? "受访者" : "系统"}</p><p>{message.content}</p>{isFinishPrompt && <div className="turn-finish-action"><button className="primary-button" onClick={onFinish} disabled={busy}>结束本次采风</button></div>}</article>; })}</div><section className="composer">{readyToFinish && <p className="composer-complete" role="status">本轮采风已收束。</p>}<label htmlFor="fieldwork-answer">你的回答 <small>一次只需说一件真实的事</small></label><textarea id="fieldwork-answer" value={answer} maxLength={2000} disabled={readyToFinish} onChange={(event) => setAnswer(event.target.value)} placeholder="可以从一个人、一件事，或一个产品细节开始。" /><div className="composer-footer"><div><label className="upload-button"><input type="file" accept="image/*" multiple disabled={readyToFinish} onChange={onFiles} />添加照片</label><span>{answer.length} / 2,000</span></div><div><button className="text-button" onClick={() => onSend(true)} disabled={busy || readyToFinish}>跳过</button><button className="primary-button" onClick={() => onSend()} disabled={busy || readyToFinish}>{busy ? "正在整理…" : "记录并继续"}</button></div></div>{uploads.map((item) => <div className="upload-item" key={item.id}><span>{item.file.name}<small>{item.status === "ready" ? "已保存" : item.status === "failed" ? item.error : "正在上传"}</small></span></div>)}</section></section><aside className="notes-panel"><header><p className="eyebrow">FIELD NOTES</p><h2>本次采风笔记</h2></header>{session.field_notes.length ? <div className="note-stack">{session.field_notes.map((note) => <article className="sticky-note" key={note.id}><p>FIELD NOTE {String(note.sequence).padStart(2, "0")}</p><h3>{note.title}</h3><p>{note.summary}</p><small>待确认</small></article>)}</div> : <p className="notes-empty">第一张笔记会在这里出现。</p>}</aside></div></>;
 }
 
 function Candidates({ candidates, confirmed, busy, onResolve, onContinue }: { candidates: Candidate[]; confirmed: number; busy: boolean; onResolve: (item: Candidate, action: "confirm" | "discard") => void; onContinue: () => void }) { const pending = candidates.some((item) => item.status === "pending"); return <section className="candidate-page"><header className="page-header compact"><p className="eyebrow">采风完成 / 候选确认</p><h1>由你决定哪些材料进入档案</h1><p>AI 整理结果不是事实，确认前请核对原始访谈。</p></header><div className="candidate-grid">{candidates.map((item, index) => <article className="candidate-card" key={item.id}><p className="eyebrow">{item.type} / {String(index + 1).padStart(2, "0")}</p><h2>{item.title}</h2><p>{item.content}</p><footer>{item.status === "pending" ? <><button className="secondary-button" onClick={() => onResolve(item, "discard")}>弃用</button><button className="primary-button" onClick={() => onResolve(item, "confirm")}>确认入档</button></> : <span className={`status ${item.status}`}>{item.status === "confirmed" ? "已确认" : "已弃用"}</span>}</footer></article>)}</div><footer className="candidate-footer"><p>{pending ? "请先处理完每一张候选卡。" : confirmed ? `已有 ${confirmed} 条材料，将归入品牌档案后进入定调。` : "至少确认一张材料后才能编志。"}</p><button className="primary-button" disabled={!confirmed || pending || busy} onClick={onContinue}>{busy ? "正在确认…" : "确认编志并定调"}</button></footer></section>; }

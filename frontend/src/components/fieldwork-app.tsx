@@ -7,7 +7,7 @@ import { FailureToast } from "@/components/failure-toast";
 
 type Message = { id: string; role: "assistant" | "user" | "system"; content: string; created_at: string };
 type FieldNote = { id: string; type: string; title: string; summary: string; sequence: number; created_at: string };
-type Session = { id: string; status: "active" | "completed"; started_at: string; messages: Message[]; field_notes: FieldNote[] };
+type Session = { id: string; status: "active" | "completed"; started_at: string; messages: Message[]; field_notes: FieldNote[]; ready_to_finish?: boolean };
 type Project = { id: string; brand_name: string; industry: string; core_product: string; origin: string; category?: string; status: string; session?: Session | null };
 type Candidate = { id: string; type: string; title: string; content: string; status: "pending" | "confirmed" | "discarded" };
 type UploadItem = { id: string; name: string; status: "uploading" | "ready" | "failed"; assetId?: string; preview: string; file: File; error?: string };
@@ -42,7 +42,6 @@ export default function FieldworkApp() {
   const [messageError, setMessageError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [finishOpen, setFinishOpen] = useState(false);
 
   const session = project?.session ?? null;
   const pendingUploads = uploads.some((item) => item.status === "uploading");
@@ -149,10 +148,8 @@ export default function FieldworkApp() {
       setCandidates(response.data.candidates);
       setProject({ ...project, session: response.data.session });
       setStep("candidates");
-      setFinishOpen(false);
     } catch (error) {
       setMessageError(error instanceof ApiError ? error.message : "整理失败，请稍后再试。");
-      setFinishOpen(false);
     } finally {
       setBusy(false);
     }
@@ -179,10 +176,9 @@ export default function FieldworkApp() {
       </aside>
       <main className="workspace">
         {step === "setup" && <SetupView form={form} setForm={setForm} busy={busy} onSubmit={startFieldwork} />}
-        {step === "interview" && project && session && <InterviewView project={project} session={session} answer={answer} setAnswer={setAnswer} uploads={uploads} busy={busy} onFiles={uploadFiles} onRetry={retryUpload} onRemove={(id) => setUploads((items) => items.filter((item) => item.id !== id))} onSend={() => void sendAnswer()} onSkip={() => void sendAnswer(true)} onFinish={() => setFinishOpen(true)} />}
+        {step === "interview" && project && session && <InterviewView project={project} session={session} answer={answer} setAnswer={setAnswer} uploads={uploads} busy={busy} onFiles={uploadFiles} onRetry={retryUpload} onRemove={(id) => setUploads((items) => items.filter((item) => item.id !== id))} onSend={() => void sendAnswer()} onSkip={() => void sendAnswer(true)} onFinish={() => void finishFieldwork()} />}
         {step === "candidates" && project && <CandidateView project={project} candidates={candidates} processed={processedCandidates} onResolve={resolveCandidate} />}
       </main>
-      {finishOpen && session && <FinishDialog notes={session.field_notes.length} onClose={() => setFinishOpen(false)} onConfirm={() => void finishFieldwork()} busy={busy} />}
       <FailureToast message={formError ?? messageError} onDismiss={() => { if (formError) setFormError(null); else setMessageError(null); }} />
     </div>
   );
@@ -195,16 +191,14 @@ function SetupView({ form, setForm, busy, onSubmit }: { form: { brand_name: stri
 }
 
 function InterviewView({ project, session, answer, setAnswer, uploads, busy, onFiles, onRetry, onRemove, onSend, onSkip, onFinish }: { project: Project; session: Session; answer: string; setAnswer: (value: string) => void; uploads: UploadItem[]; busy: boolean; onFiles: (event: ChangeEvent<HTMLInputElement>) => void; onRetry: (item: UploadItem) => void; onRemove: (id: string) => void; onSend: () => void; onSkip: () => void; onFinish: () => void }) {
-  return <><header className="interview-header"><div><p className="eyebrow">采风记录 · 001</p><h1>{project.core_product}</h1><p>{project.origin} · {dateText(session.started_at)}</p></div><div className="save-state"><i aria-hidden="true" />资料已保存<br /><a href="#notes">查看本次笔记</a></div></header><div className="interview-layout"><section className="transcript" aria-label="采风访谈转录"><div className="transcript-head"><div><p className="eyebrow">FIELD INTERVIEW</p><h2>从真实经历开始</h2></div><button className="secondary-button" onClick={onFinish} disabled={busy || session.field_notes.length === 0}>结束本次采风</button></div><div className="transcript-list" aria-live="polite">{session.messages.map((message) => <article className={`turn turn-${message.role}`} key={message.id}><p className="turn-meta">{message.role === "assistant" ? "调查员" : message.role === "user" ? "受访者" : "系统处理"}</p><p>{message.content}</p></article>)}</div><section className="composer" aria-label="回答当前问题"><label htmlFor="fieldwork-answer">你的回答 <small>一次只需说一件真实的事</small></label><textarea id="fieldwork-answer" value={answer} maxLength={2000} onChange={(event) => setAnswer(event.target.value)} placeholder="可以从一个人、一件事，或一个产品细节开始。" /><div className="composer-footer"><div><label className="upload-button"><input type="file" accept="image/*" multiple onChange={onFiles} />添加照片</label><span>{answer.length} / 2,000</span></div><div><button className="text-button" onClick={onSkip} disabled={busy}>跳过这题</button><button className="primary-button" onClick={onSend} disabled={busy}>{busy ? "正在整理…" : "记录并继续"}</button></div></div>{uploads.length > 0 && <div className="upload-list">{uploads.map((item) => <div className="upload-item" key={item.id}><img src={item.preview} alt={`待上传：${item.name}`} /><span>{item.name}<small>{item.status === "uploading" ? "正在上传" : item.status === "ready" ? "已保存" : item.error}</small></span>{item.status === "failed" ? <button onClick={() => onRetry(item)}>重试</button> : <button onClick={() => onRemove(item.id)} aria-label={`移除 ${item.name}`}>移除</button>}</div>)}</div>}</section></section><NotesPanel notes={session.field_notes} /></div></>;
+  const readyToFinish = Boolean(session.ready_to_finish);
+  return <><header className="interview-header"><div><p className="eyebrow">采风记录 · 001</p><h1>{project.core_product}</h1><p>{project.origin} · {dateText(session.started_at)}</p></div><div className="save-state"><i aria-hidden="true" />资料已保存<br /><a href="#notes">查看本次笔记</a></div></header><div className="interview-layout"><section className="transcript" aria-label="采风访谈转录"><div className="transcript-head"><div><p className="eyebrow">FIELD INTERVIEW</p><h2>从真实经历开始</h2></div></div><div className="transcript-list" aria-live="polite">{session.messages.map((message, index) => { const isFinishPrompt = readyToFinish && message.role === "assistant" && index === session.messages.length - 1; return <article className={`turn turn-${message.role}`} key={message.id}><p className="turn-meta">{message.role === "assistant" ? "调查员" : message.role === "user" ? "受访者" : "系统处理"}</p><p>{message.content}</p>{isFinishPrompt && <div className="turn-finish-action"><button className="primary-button" onClick={onFinish} disabled={busy}>结束本次采风</button></div>}</article>; })}</div><section className="composer" aria-label="回答当前问题">{readyToFinish && <p className="composer-complete" role="status">本轮采风已收束。</p>}<label htmlFor="fieldwork-answer">你的回答 <small>一次只需说一件真实的事</small></label><textarea id="fieldwork-answer" value={answer} maxLength={2000} disabled={readyToFinish} onChange={(event) => setAnswer(event.target.value)} placeholder="可以从一个人、一件事，或一个产品细节开始。" /><div className="composer-footer"><div><label className="upload-button"><input type="file" accept="image/*" multiple disabled={readyToFinish} onChange={onFiles} />添加照片</label><span>{answer.length} / 2,000</span></div><div><button className="text-button" onClick={onSkip} disabled={busy || readyToFinish}>跳过这题</button><button className="primary-button" onClick={onSend} disabled={busy || readyToFinish}>{busy ? "正在整理…" : "记录并继续"}</button></div></div>{uploads.length > 0 && <div className="upload-list">{uploads.map((item) => <div className="upload-item" key={item.id}><img src={item.preview} alt={`待上传：${item.name}`} /><span>{item.name}<small>{item.status === "uploading" ? "正在上传" : item.status === "ready" ? "已保存" : item.error}</small></span>{item.status === "failed" ? <button onClick={() => onRetry(item)}>重试</button> : <button onClick={() => onRemove(item.id)} aria-label={`移除 ${item.name}`}>移除</button>}</div>)}</div>}</section></section><NotesPanel notes={session.field_notes} /></div></>;
 }
 
 function NotesPanel({ notes }: { notes: FieldNote[] }) {
   return <aside className="notes-panel" id="notes"><header><p className="eyebrow">FIELD NOTES</p><h2>本次采风笔记</h2><p>只读记录，完成后再逐张确认是否入档。</p></header>{notes.length === 0 ? <div className="notes-empty">访谈围绕一个话题收束后，第一张笔记会出现在这里。</div> : <div className="note-stack">{notes.map((note) => <article className="sticky-note" key={note.id}><p>FIELD NOTE {String(note.sequence).padStart(2, "0")} <span>{noteType(note.type)}</span></p><h3>{note.title}</h3><p>{note.summary}</p><small>AI 摘要 · 待确认</small></article>)}</div>}</aside>;
 }
 
-function FinishDialog({ notes, busy, onClose, onConfirm }: { notes: number; busy: boolean; onClose: () => void; onConfirm: () => void }) {
-  return <div className="modal-backdrop" role="presentation"><section className="finish-dialog" role="dialog" aria-modal="true" aria-labelledby="finish-title"><p className="eyebrow">结束确认</p><h2 id="finish-title">整理本次采风？</h2><p>本次已留下 {notes} 条采风笔记。系统将生成候选档案，只有你确认的内容才会进入编志。</p><footer><button className="secondary-button" onClick={onClose} disabled={busy}>继续采风</button><button className="primary-button" onClick={onConfirm} disabled={busy}>{busy ? "正在整理…" : "整理候选档案"}</button></footer></section></div>;
-}
 
 function CandidateView({ project, candidates, processed, onResolve }: { project: Project; candidates: Candidate[]; processed: number; onResolve: (candidate: Candidate, action: "confirm" | "discard") => void }) {
   const confirmed = candidates.filter((candidate) => candidate.status === "confirmed").length;

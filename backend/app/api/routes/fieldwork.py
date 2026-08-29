@@ -259,7 +259,8 @@ def session_payload(session: dict[str, Any]) -> dict[str, Any]:
         notes = [decode_record(dict(row)) for row in connection.execute(
             "SELECT * FROM field_notes WHERE session_id = ? ORDER BY sequence", (session["id"],)
         )]
-    return {**session, "messages": messages, "field_notes": notes}
+    ready_to_finish = bool(messages) and messages[-1]["role"] == "assistant" and session["status"] == "active" and "结束本次采风" in messages[-1]["content"]
+    return {**session, "messages": messages, "field_notes": notes, "ready_to_finish": ready_to_finish}
 
 
 @router.post("/projects")
@@ -594,13 +595,22 @@ def finish_session(
             candidates = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM candidates WHERE project_id = ?", (project["id"],))]
             return envelope({"session": session, "candidates": candidates})
         notes = [decode_record(dict(row)) for row in connection.execute("SELECT * FROM field_notes WHERE session_id = ? ORDER BY sequence", (session_id,))]
-        if not notes:
-            fail(422, "至少记录一段有效材料后才能结束采风", "notes_required")
-        for note in notes:
-            connection.execute(
-                "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-                (new_id(), project["id"], json_value([note["id"]]), note["type"], note["title"], note["summary"], now()),
-            )
+        if notes:
+            for note in notes:
+                connection.execute(
+                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    (new_id(), project["id"], json_value([note["id"]]), note["type"], note["title"], note["summary"], now()),
+                )
+        else:
+            for candidate_type, title, content in (
+                ("BRAND", "品牌主体", project["brand_name"]),
+                ("PRODUCT", "产品产业", project["industry"] or project["core_product"]),
+                ("ORIGIN", "主要产地", project["origin"]),
+            ):
+                connection.execute(
+                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    (new_id(), project["id"], json_value([]), candidate_type, title, content, now()),
+                )
         ended = now()
         connection.execute("UPDATE sessions SET status = 'completed', ended_at = ? WHERE id = ?", (ended, session_id))
         connection.execute("UPDATE projects SET status = 'fieldwork_completed', updated_at = ? WHERE id = ?", (ended, project["id"]))
@@ -630,7 +640,7 @@ def update_candidate(candidate_id: str, action: str, visitor: dict[str, Any]) ->
                 archive_id = new_id()
                 connection.execute(
                     "INSERT INTO archive_cards (id, project_id, candidate_id, type, title, content, status, created_at, updated_at, content_version, source_summary) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, 1, ?)",
-                    (archive_id, candidate["project_id"], candidate_id, candidate["type"], candidate["title"], candidate["content"], now(), now(), "采风问答与图片来源"),
+                    (archive_id, candidate["project_id"], candidate_id, candidate["type"], candidate["title"], candidate["content"], now(), now(), "基础建档" if not json.loads(candidate["field_note_ids_json"]) else "采风问答与图片来源"),
                 )
                 note_ids = json.loads(candidate["field_note_ids_json"])
                 if note_ids:

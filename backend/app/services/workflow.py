@@ -14,6 +14,7 @@ import httpx
 
 from app.core.config import settings
 from app.fieldwork.store import connect, decode_record, json_value, new_id, now, row_dict
+from app.services.brand_manual_ppt import build_brand_manual_slides
 from app.services.providers import ProviderError, provider
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mountainlore-workflow")
@@ -492,25 +493,9 @@ def _build_pdf(snapshot: dict[str, Any], destination: Path) -> None:
     palette = content.get("color_palette") if isinstance(content.get("color_palette"), list) else []
     colors = [str(item) for item in palette if str(item).startswith("#")][:4]
     colors += ["#18372B", "#2B6173", "#D5A72B", "#F7F1E3"][len(colors):]
-    strategy = content.get("brand_strategy") if isinstance(content.get("brand_strategy"), dict) else {}
-    story_system = content.get("story_system") if isinstance(content.get("story_system"), dict) else {}
-    selling_points = content.get("selling_points") if isinstance(content.get("selling_points"), list) else []
-    while len(selling_points) < 3:
-        selling_points.append({"category": "产品创新", "explanation": "待补充卖点解释"})
     logo_asset = next((asset for asset in snapshot["assets"] if asset.get("kind") == "logo_mark"), None)
     logo_path = Path(settings.media_directory) / str(logo_asset.get("storage_key") or "") if logo_asset else None
-    slides = [
-        ("首页", str(content.get("brand_name") or "品牌视觉手册"), "品牌手册", "cover"),
-        ("Logo", "Logo", "品牌识别的核心图形", "logo"),
-        ("字体 / 颜色", str(content.get("font_label") or "思源宋体 / 思源黑体"), "字体与颜色方案", "system"),
-        ("品牌一句话", str(content.get("brand_one_liner") or content.get("slogan") or ""), "一句话说清我们是谁", "text"),
-        ("口号", str(content.get("slogan") or ""), "品牌口号", "text"),
-        ("目标人群 / 场景", str(content.get("target_audience") or strategy.get("audience") or ""), str(content.get("target_scenarios") or "、".join(strategy.get("scenarios", [])) if isinstance(strategy.get("scenarios"), list) else strategy.get("scenarios") or ""), "text"),
-        ("故事主线", str(content.get("story_spine") or story_system.get("main_story") or content.get("brand_introduction") or ""), "一句话品牌故事", "text"),
-    ]
-    for index, raw in enumerate(selling_points[:3], start=1):
-        point = raw if isinstance(raw, dict) else {"explanation": str(raw)}
-        slides.append((f"卖点 {index}", str(point.get("category") or "产品创新"), str(point.get("explanation") or point.get("text") or ""), "point"))
+    slides = build_brand_manual_slides(content)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     width, height = landscape(A4)
@@ -567,7 +552,7 @@ def _build_pdf(snapshot: dict[str, Any], destination: Path) -> None:
                 body_y -= 9 * mm
         document.setFillColor(HexColor("#9A9F9A"))
         document.setFont("STSong-Light", 8)
-        document.drawRightString(width - 18 * mm, 11 * mm, "贵品风物志 · HTML 品牌手册导出")
+        document.drawRightString(width - 18 * mm, 11 * mm, "贵品风物志 · 品牌手册 PPT 渲染")
         document.showPage()
     document.save()
 
