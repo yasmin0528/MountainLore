@@ -258,3 +258,10 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 /* 试用案例的输入区不悬浮，避免遮挡上方对话记录中的提问。 */
 .trial-composer { position: static; margin-top: 24px; }
 @media (max-width: 760px) { .trial-composer { margin-top: 18px; } }
+/* 编志候选：联网资料与采风材料以同一张档案卡呈现。 */
+.candidate-research-wait{display:flex;align-items:center;gap:14px;max-width:680px;margin:32px auto;padding:22px 24px;border:1px solid var(--border);border-left:4px solid var(--yellow-deep);background:var(--paper-high);box-shadow:2px 3px 0 color-mix(in srgb,var(--border) 42%,transparent)}
+.candidate-research-wait i{width:14px;height:14px;flex:0 0 auto;border:2px solid var(--indigo);border-top-color:transparent;border-radius:50%;animation:candidate-source-spin .8s linear infinite}.candidate-research-wait strong{font:600 17px var(--font-heading,"Noto Serif SC",STSong,serif);color:var(--ink)}.candidate-research-wait p{margin:4px 0 0;color:var(--muted);font-size:13px;line-height:1.65}
+.candidate-sources{margin:14px 0 2px;padding-top:12px;border-top:1px dashed var(--border)}.candidate-sources summary{cursor:pointer;color:var(--indigo);font-size:12px;font-weight:700}.candidate-sources ul{display:grid;gap:10px;margin:10px 0 0;padding:0;list-style:none}.candidate-sources li{display:grid;gap:3px;padding:9px 10px;background:var(--paper-muted);border-left:2px solid var(--moss)}.candidate-sources a{color:var(--indigo);font-size:12px;line-height:1.5;text-decoration:underline;text-underline-offset:2px}.candidate-sources span{color:var(--moss-deep);font-size:10px;font-weight:700}.candidate-sources li p{margin:1px 0 0!important;color:var(--muted)!important;font-size:11px!important;line-height:1.55!important}.candidate-risk{display:block;margin:10px 0 0;color:var(--moss-deep);font-size:11px}.candidate-risk.medium{color:var(--yellow-deep)}.candidate-risk.high{color:var(--rose-deep)}
+@keyframes candidate-source-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.candidate-research-wait i{animation:none}}
+@media (max-width:760px){.candidate-research-wait{margin:22px 0;padding:18px}.candidate-sources li{padding:9px}.candidate-sources a{overflow-wrap:anywhere}}

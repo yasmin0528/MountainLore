@@ -57,6 +57,23 @@ class WeeklyTideIdea:
 
 
 @dataclass(frozen=True)
+class CulturalResearchSource:
+    url: str
+    title: str
+    excerpt: str
+    authority: str
+
+
+@dataclass(frozen=True)
+class CulturalResearchCard:
+    type: str
+    title: str
+    content: str
+    risk: str
+    source_urls: list[str]
+
+
+@dataclass(frozen=True)
 class TavilyWeeklyQuery:
     domain: str
     channel: str
@@ -122,6 +139,17 @@ def _is_candidate_date_eligible(published_at: object) -> bool:
     can still be discarded early to save a network request.
     """
     return not published_at or _is_recent(published_at)
+def _cultural_source_authority(url: str) -> str:
+    host = url.split("//", 1)[-1].split("/", 1)[0].lower()
+    if host.endswith(".gov.cn") or host == "gov.cn":
+        return "official"
+    if host.endswith(".edu.cn") or "cnki" in host:
+        return "academic"
+    if any(token in host for token in ("museum", "heritage", "ich", "whc")):
+        return "cultural_institution"
+    return "media"
+
+
 
 class CreditsProvider:
     def __init__(self) -> None:
@@ -296,8 +324,82 @@ class CreditsProvider:
             raise ProviderError("missing_citations", "联网模型没有返回可验证的来源")
         return sources
 
-    def weekly_tide_candidates(self) -> list[WeeklyTideSource]:
+    def cultural_research(self, origin: str, core_product: str) -> tuple[list[CulturalResearchCard], dict[str, CulturalResearchSource]]:
+        """Return only source-backed cultural leads suitable for user review."""
+        if not self.live or not settings.tide_configured:
+            return [], {}
+        query_prefix = f"{origin} {core_product}".strip()
+        queries = [
+            f"{query_prefix} 地方志 民俗 传统生活 官方 文化馆 博物馆",
+            f"{query_prefix} 非物质文化遗产 民族文化 官方",
+            f"{query_prefix} 民族志 民俗 学术 高校 研究",
+        ]
+        sources: list[CulturalResearchSource] = []
+        seen_urls: set[str] = set()
+        for query in queries:
+            for raw in self._cultural_tavily_search(query).get("results", []):
+                if not isinstance(raw, dict):
+                    continue
+                url = str(raw.get("url") or "").strip()
+                excerpt = str(raw.get("raw_content") or raw.get("content") or "").strip()
+                if not url.startswith("https://") or url in seen_urls or not excerpt:
+                    continue
+                seen_urls.add(url)
+                sources.append(CulturalResearchSource(
+                    url=url,
+                    title=str(raw.get("title") or "未命名来源").strip(),
+                    excerpt=excerpt[:2400],
+                    authority=_cultural_source_authority(url),
+                ))
+        priority = {"official": 0, "academic": 1, "cultural_institution": 2, "media": 3}
+        sources.sort(key=lambda item: (priority[item.authority], item.title, item.url))
+        sources = sources[:9]
+        if not sources:
+            return [], {}
+        source_map = {source.url: source for source in sources}
+        result = self.tide_chat_json(
+            model=settings.tide_synthesis_model,
+            instruction=(
+                "基于输入的可追溯公开资料，为山地农产品品牌编志提出至多3张候选档案卡。"
+                "聚焦产地与产品可被资料直接支持的地方生活、历史脉络、物产技艺、非遗或民族志线索。"
+                "不得编造人物、仪式、民族身份、传统、年代、产品功效或品牌关联；不能把一般地方资料说成该品牌事实。"
+                "每张卡必须只概括 source_urls 明确支持的内容，并引用至少一个输入 URL。"
+                "官方、高校学术、文博/非遗机构优先；媒体材料只能作为待核验线索，risk 标为 medium 或 high。"
+                "返回 JSON：{\"cards\":[{\"type\":\"LOCAL_CULTURE|ETHNOGRAPHY|HERITAGE\",\"title\":\"...\",\"content\":\"...\",\"risk\":\"low|medium|high\",\"source_urls\":[\"https://...\"]}]}。"
+                "没有可靠线索时返回空数组。"
+            ),
+            context={"origin": origin, "core_product": core_product, "sources": [
+                {"url": source.url, "title": source.title, "excerpt": source.excerpt, "authority": source.authority}
+                for source in sources
+            ]},
+            temperature=0.2,
+        )
+        raw_cards = result.get("cards")
+        if not isinstance(raw_cards, list):
+            return [], source_map
+        cards: list[CulturalResearchCard] = []
+        seen_cards: set[tuple[str, str]] = set()
+        for raw in raw_cards:
+            if not isinstance(raw, dict):
+                continue
+            title, content = str(raw.get("title") or "").strip(), str(raw.get("content") or "").strip()
+            urls = [str(url).strip() for url in raw.get("source_urls", []) if str(url).strip() in source_map]
+            key = (title, content)
+            if not title or not content or not urls or key in seen_cards:
+                continue
+            seen_cards.add(key)
+            risk = str(raw.get("risk") or "medium").lower()
+            card_type = str(raw.get("type") or "LOCAL_CULTURE").upper()
+            cards.append(CulturalResearchCard(
+                card_type if card_type in {"LOCAL_CULTURE", "ETHNOGRAPHY", "HERITAGE"} else "LOCAL_CULTURE",
+                title, content, risk if risk in {"low", "medium", "high"} else "medium", list(dict.fromkeys(urls)),
+            ))
+            if len(cards) == 3:
+                break
+        return cards, source_map
+
         """Collect diverse candidate pages directly from Tavily before local verification."""
+    def weekly_tide_candidates(self) -> list[WeeklyTideSource]:
         if not self.live:
             raise ProviderError("demo_mode", "演示模式未调用真实联网检索")
         if settings.tide_search_provider.lower() != "tavily":
@@ -407,6 +509,31 @@ class CreditsProvider:
     def _post_tavily(self, payload: dict[str, Any]) -> httpx.Response:
         with httpx.Client(timeout=self.timeout) as client:
             return client.post("https://api.tavily.com/search", json=payload)
+    def _cultural_tavily_search(self, query: str) -> dict[str, Any]:
+        payload = {
+            "api_key": settings.tavily_api_key, "query": query, "topic": "general",
+            "search_depth": settings.tavily_search_depth, "max_results": 3,
+            "country": settings.tavily_country, "include_answer": False, "include_raw_content": "markdown",
+        }
+        try:
+            response = self._post_tavily(payload)
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise ProviderError("tavily_timeout", "文化资料检索超时") from exc
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in {401, 403}:
+                raise ProviderError("tavily_auth_failed", "Tavily Key 无效或没有访问权限", retriable=False) from exc
+            if status in {402, 429}:
+                raise ProviderError("tavily_quota_or_rate_limited", "Tavily 免费额度不足或请求受限", retriable=False) from exc
+            raise ProviderError("tavily_unavailable", f"Tavily 返回 HTTP {status}") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError("tavily_unavailable", "Tavily 服务暂不可用") from exc
+        body = response.json()
+        if not isinstance(body, dict):
+            raise ProviderError("tavily_invalid_response", "Tavily 返回格式无效")
+        return body
+
 
     def weekly_tide_ideas(self, sources: list[dict[str, Any]], holidays: list[dict[str, str]]) -> list[WeeklyTideIdea]:
         instruction = (

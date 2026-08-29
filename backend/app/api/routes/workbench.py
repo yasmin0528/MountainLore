@@ -306,6 +306,11 @@ def confirm_chronicle(project_id: str, payload: DirectionCreate, visitor: Annota
         pending = connection.execute("SELECT COUNT(*) FROM candidates WHERE project_id = ? AND status = 'pending'", (project_id,)).fetchone()[0]
         if pending:
             fail(409, "请先逐张确认或弃用候选档案", "candidates_pending")
+        research = row_dict(connection.execute(
+            "SELECT status FROM tasks WHERE project_id = ? AND kind = 'culture_research' ORDER BY created_at DESC LIMIT 1", (project_id,)
+        ).fetchone())
+        if research and research["status"] in {"queued", "running"}:
+            fail(409, "正在整理候选档案，请稍候。", "culture_research_pending")
         snapshot = project_snapshot(connection, project_id)
         if not snapshot["archive_cards"]:
             fail(422, "请先确认至少一张档案卡", "archive_required")

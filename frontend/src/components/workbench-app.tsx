@@ -13,11 +13,12 @@ type Account = { id: string; email: string; created_at: string };
 type Session = { id: string; status: string; started_at: string; field_notes: Note[]; messages: Message[]; ready_to_finish?: boolean; round?: number };
 type Message = { id: string; role: "assistant" | "user" | "system"; content: string };
 type Note = { id: string; type: string; title: string; summary: string; sequence: number };
-type Candidate = { id: string; type: string; title: string; content: string; status: string };
+type CandidateSource = { id: string; url: string; title: string; excerpt: string; authority: string; captured_at: string };
+type Candidate = { id: string; type: string; title: string; content: string; status: string; risk?: string; sources?: CandidateSource[] };
 export type ArchiveCard = { id: string; type: string; title: string; content: string; status: string; content_version: number; source_summary?: string; created_at?: string; updated_at?: string };
 export type Direction = { id: string; route_no: number; state: string; title: string; content_json?: Record<string, unknown>; content?: Record<string, unknown>; version?: number };
 export type Claim = { id: string; field_note_id?: string; statement: string; status: string; risk: string; public_allowed: number; source_record_ids?: string[] };
-export type WorkflowTask = { id: string; kind: "follow_up" | "route_generation" | "manual_generation" | "logo_generation" | "manual_asset_generation" | "export"; status: "queued" | "running" | "succeeded" | "partial" | "failed"; progress: number; error_code?: string; result?: Record<string, unknown> };
+export type WorkflowTask = { id: string; kind: "follow_up" | "route_generation" | "manual_generation" | "logo_generation" | "manual_asset_generation" | "export" | "culture_research"; status: "queued" | "running" | "succeeded" | "partial" | "failed"; progress: number; error_code?: string; result?: Record<string, unknown> };
 export type ManualAsset = { id: string; kind: string; media_asset_id?: string; url?: string; metadata?: Record<string, unknown> };
 export type ManualVersion = { id: string; version: number; status: string; content: Record<string, unknown>; created_at: string };
 type Inspiration = { id: string; theme: string; content_motif: string; source_url: string; source_title: string; published_at?: string; fit_reason: string; risk_note: string; favorite: number };
@@ -112,6 +113,7 @@ export default function WorkbenchApp() {
   const [project, setProject] = useState<Project | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [cultureResearchTask, setCultureResearchTask] = useState<WorkflowTask | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [projectDirectory, setProjectDirectory] = useState<Project[]>([]);
   const [screen, setScreen] = useState<Screen>("setup");
@@ -206,6 +208,26 @@ export default function WorkbenchApp() {
     return () => window.clearInterval(timer);
   }, [activeWorkflowTask, project, screen]);
 
+  useEffect(() => {
+    if (screen !== "candidates" || !project || !cultureResearchTask || !["queued", "running"].includes(cultureResearchTask.status)) return;
+    let disposed = false;
+    const syncResearch = async () => {
+      try {
+        const taskResponse = await api<{ data: WorkflowTask }>(`/tasks/${cultureResearchTask.id}`);
+        if (disposed) return;
+        setCultureResearchTask(taskResponse.data);
+        if (!["queued", "running"].includes(taskResponse.data.status)) {
+          const candidateResponse = await api<{ data: Candidate[] }>(`/projects/${project.id}/candidates`);
+          if (!disposed) setCandidates(candidateResponse.data);
+        }
+      } catch {
+        // Research is intentionally a quiet enhancement: existing fieldwork cards stay usable.
+      }
+    };
+    void syncResearch();
+    const timer = window.setInterval(() => { void syncResearch(); }, 1200);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [cultureResearchTask, project, screen]);
   const loadTideReport = useCallback(async () => {
     if (!visitorReady) return;
     const path = project ? "/projects/" + project.id + "/tide-report" : null;
@@ -321,8 +343,8 @@ export default function WorkbenchApp() {
     if (!session || !project) return;
     setBusy(true); setError(null);
     try {
-      const result = await api<{ data: { candidates: Candidate[]; session: Session } }>(`/sessions/${session.id}/finish`, { method: "POST", headers: { "Idempotency-Key": createRequestId("finish") } });
-      setCandidates(result.data.candidates); setSession(result.data.session); setScreen("candidates");
+      const result = await api<{ data: { candidates: Candidate[]; session: Session; research_task?: WorkflowTask | null } }>(`/sessions/${session.id}/finish`, { method: "POST", headers: { "Idempotency-Key": createRequestId("finish") } });
+      setCandidates(result.data.candidates); setCultureResearchTask(result.data.research_task ?? null); setSession(result.data.session); setScreen("candidates");
     } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); }
   }
 
@@ -332,7 +354,7 @@ export default function WorkbenchApp() {
     try {
       const result = await api<{ data: { session: Session } }>(`/projects/${project.id}/fieldwork/restart`, { method: "POST", headers: { "Idempotency-Key": createRequestId("fieldwork-restart") } });
       setProject((current) => current ? { ...current, status: "active", current_stage: "fieldwork" } : current);
-      setSession(result.data.session); setScreen("interview"); setAnswer(""); setUploads([]); setCandidates([]);
+      setSession(result.data.session); setScreen("interview"); setAnswer(""); setUploads([]); setCandidates([]); setCultureResearchTask(null);
     } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); }
   }
 
@@ -455,7 +477,7 @@ export default function WorkbenchApp() {
     <main className="workspace"><header className="mobile-workspace-bar"><button ref={mobileNavTriggerRef} type="button" className="mobile-project-mark" aria-label={mobileNavOpen ? "收起导航菜单" : "打开导航菜单"} aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => mobileNavOpen ? closeMobileNav() : setMobileNavOpen(true)}>贵</button><div className="mobile-workspace-title"><strong>贵品风物志</strong><small>{mobileScreenTitles[screen]}</small></div></header>
       {screen === "setup" && <Setup form={form} setForm={setForm} busy={busy} isTrialCase={isTrialCase} onSubmit={start} onTrialCase={loadTrialCase} />}
       {screen === "interview" && project && session && <Interview project={project} session={session} answer={answer} setAnswer={setAnswer} uploads={uploads} busy={busy} onFiles={uploadFiles} onSend={sendMessage} trialAnswers={isTrialCase ? TRIAL_CASE.answers : []} onFinish={finishFieldwork} onContinueFieldwork={restartFieldwork} />}
-      {screen === "candidates" && <Candidates candidates={candidates} confirmed={confirmedCount} busy={busy} onResolve={resolveCandidate} onContinue={confirmChronicle} />}
+      {screen === "candidates" && <Candidates candidates={candidates} confirmed={confirmedCount} researching={Boolean(cultureResearchTask && ["queued", "running"].includes(cultureResearchTask.status))} busy={busy} onResolve={resolveCandidate} onContinue={confirmChronicle} />}
       {screen === "project-directory" && <ProjectDirectory projects={projectDirectory} onSelect={openProject} onDelete={(item) => setDeleteTarget(item)} onCreate={() => { setIsTrialCase(false); setScreen("setup"); }} />}
       {screen === "archive" && workspace && <BrandMaterials workspace={workspace} onOpenArchive={() => setArchiveModal("cards")} onOpenManual={() => setScreen("manual")} onOpenRecords={() => setScreen("assets")} />}
       {screen === "assets" && workspace && <AssetHistory workspace={workspace} onBack={() => setScreen("archive")} onLaunch={() => navigate("launch")} />}
@@ -517,7 +539,11 @@ function Interview({ project, session, answer, setAnswer, uploads, busy, onFiles
   return <><header className="interview-header"><div><p className="eyebrow">FIELD INTERVIEW{round > 1 ? ` / 第 ${round} 轮采风` : ""}</p><h1>{project.core_product}</h1><p>{project.origin} · 已自动保存</p></div></header><div className="interview-layout"><section className="transcript"><div className="transcript-head"><div><p className="eyebrow">对话记录</p><h2>从真实经历开始</h2></div><span>{session.field_notes.length} 条笔记</span></div><div className="transcript-list">{session.messages.map((message) => { return <article className={`turn turn-${message.role}`} key={message.id}><p className="turn-meta">{message.role === "assistant" ? "调查员" : message.role === "user" ? "受访者" : "系统"}</p><p>{message.content}</p></article>; })}</div><section className={trialAnswers.length > 0 ? "composer trial-composer" : "composer"}>{readyToFinish && <p className="composer-complete" role="status">本轮采风已收束。</p>}<label htmlFor="fieldwork-answer">你的回答 <small>一次只需说一件真实的事</small></label><textarea id="fieldwork-answer" value={answer} maxLength={2000} onChange={(event) => setAnswer(event.target.value)} placeholder="可以从一个人、一件事，或一个产品细节开始。" />{trialAnswers.length > 0 && !readyToFinish && <section className="trial-answer-options" aria-label="内置案例可选回答"><div><strong>内置案例可选回答</strong><small>点击后直接记录到本轮采风</small></div><div className="trial-answer-list">{trialAnswers.map((item) => <button type="button" className="trial-answer-button" key={item.id} disabled={busy} onClick={() => onSend(false, item.content)}><b>{item.label}</b><span>{item.content}</span></button>)}</div></section>}<div className="composer-footer"><div><label className="upload-button"><input type="file" accept="image/*" multiple onChange={onFiles} />添加照片</label><span>{answer.length} / 2,000</span></div><div><button className="text-button" onClick={() => onSend(true)} disabled={busy}>跳过</button><button className="primary-button" onClick={() => onSend()} disabled={busy}>{busy ? "正在整理…" : "记录并继续"}</button>{showFinishAction && <button className="secondary-button" onClick={onContinueFieldwork} disabled={busy}>继续采风</button>}{showFinishAction && <button className="secondary-button" onClick={onFinish} disabled={busy}>结束本次采风</button>}</div></div>{uploads.map((item) => <div className="upload-item" key={item.id}><span>{item.file.name}<small>{item.status === "ready" ? "已保存" : item.status === "failed" ? item.error : "正在上传"}</small></span></div>)}</section></section><aside className="notes-panel"><header><p className="eyebrow">FIELD NOTES</p><h2>本次采风笔记</h2></header>{session.field_notes.length ? <div className="note-stack">{session.field_notes.map((note) => <article className="sticky-note" key={note.id}><p>FIELD NOTE {String(note.sequence).padStart(2, "0")}</p><h3>{note.title}</h3><p>{note.summary}</p><small>待确认</small></article>)}</div> : <p className="notes-empty">第一张笔记会在这里出现。</p>}</aside></div></>;
 }
 
-function Candidates({ candidates, confirmed, busy, onResolve, onContinue }: { candidates: Candidate[]; confirmed: number; busy: boolean; onResolve: (item: Candidate, action: "confirm" | "discard") => void; onContinue: () => void }) { const pending = candidates.some((item) => item.status === "pending"); return <section className="candidate-page"><header className="page-header compact"><p className="eyebrow">采风完成 / 候选确认</p><h1>由你决定哪些材料进入档案</h1><p>AI 整理结果不是事实，确认前请核对原始访谈。</p></header><div className="candidate-grid">{candidates.map((item, index) => <article className="candidate-card" key={item.id}><p className="eyebrow">{item.type} / {String(index + 1).padStart(2, "0")}</p><h2>{item.title}</h2><p>{item.content}</p><footer>{item.status === "pending" ? <><button className="secondary-button" onClick={() => onResolve(item, "discard")}>弃用</button><button className="primary-button" onClick={() => onResolve(item, "confirm")}>确认入档</button></> : <span className={`status ${item.status}`}>{item.status === "confirmed" ? "已确认" : "已弃用"}</span>}</footer></article>)}</div><footer className="candidate-footer"><p>{pending ? "请先处理完每一张候选卡。" : confirmed ? `已有 ${confirmed} 条材料，将归入品牌档案后进入定调。` : "至少确认一张材料后才能编志。"}</p><button className="primary-button" disabled={!confirmed || pending || busy} onClick={onContinue}>{busy ? "正在确认…" : "确认编志并定调"}</button></footer></section>; }
+function Candidates({ candidates, confirmed, researching, busy, onResolve, onContinue }: { candidates: Candidate[]; confirmed: number; researching: boolean; busy: boolean; onResolve: (item: Candidate, action: "confirm" | "discard") => void; onContinue: () => void }) {
+  const pending = candidates.some((item) => item.status === "pending");
+  const authorityLabel: Record<string, string> = { official: "官方资料", academic: "学术资料", cultural_institution: "文博 / 非遗机构", media: "待核验线索" };
+  return <section className="candidate-page"><header className="page-header compact"><p className="eyebrow">采风完成 / 候选确认</p><h1>由你决定哪些材料进入档案</h1><p>{researching ? "正在补充可追溯的产地与产品线索。" : "AI 整理结果不是事实，确认前请核对原始访谈与来源。"}</p></header>{researching ? <section className="candidate-research-wait" role="status"><i aria-hidden="true" /><div><strong>正在翻阅地方资料</strong><p>会把有出处的文化线索和本次采风材料一起交给你确认。</p></div></section> : <><div className="candidate-grid">{candidates.map((item, index) => <article className="candidate-card" key={item.id}><p className="eyebrow">{item.type} / {String(index + 1).padStart(2, "0")}</p><h2>{item.title}</h2><p>{item.content}</p>{item.sources?.length ? <details className="candidate-sources"><summary>来源与依据 · {item.sources.length} 条</summary><ul>{item.sources.map((source) => <li key={source.id}><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><span>{authorityLabel[source.authority] ?? "公开资料"}</span>{source.excerpt && <p>{source.excerpt}</p>}</li>)}</ul></details> : null}{item.risk && item.sources?.length ? <small className={`candidate-risk ${item.risk}`}>{item.risk === "low" ? "来源已记录" : item.risk === "medium" ? "请留意原始语境" : "需谨慎使用"}</small> : null}<footer>{item.status === "pending" ? <><button className="secondary-button" onClick={() => onResolve(item, "discard")}>弃用</button><button className="primary-button" onClick={() => onResolve(item, "confirm")}>确认入档</button></> : <span className={`status ${item.status}`}>{item.status === "confirmed" ? "已确认" : "已弃用"}</span>}</footer></article>)}</div><footer className="candidate-footer"><p>{pending ? "请先处理完每一张候选卡。" : confirmed ? `已有 ${confirmed} 条材料，将归入品牌档案后进入定调。` : "至少确认一张材料后才能编志。"}</p><button className="primary-button" disabled={!confirmed || pending || busy} onClick={onContinue}>{busy ? "正在确认…" : "确认编志并定调"}</button></footer></>}</section>;
+}
 
 function TaskStatus({ task, onRetry }: { task?: WorkflowTask; onRetry: (id: string) => void }) {
   if (!task) return null;

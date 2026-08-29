@@ -184,6 +184,8 @@ def _run_task(task_id: str) -> None:
             result = _generate_manual_asset(task)
         elif task["kind"] == "export":
             result = _generate_exports(task)
+        elif task["kind"] == "culture_research":
+            result = _generate_culture_research(task)
         else:
             raise ProviderError("unsupported_task", f"不支持的任务类型：{task['kind']}")
         # 导出只由用户显式触发，避免手册首次可见时与视觉任务争抢队列。
@@ -651,3 +653,49 @@ def _generate_exports(task: dict[str, Any]) -> dict[str, Any]:
 
 def hash_share_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def _generate_culture_research(task: dict[str, Any]) -> dict[str, Any]:
+    snapshot = json.loads(task["input_snapshot_json"])
+    project = snapshot["project"]
+    cards, source_map = provider.cultural_research(str(project["origin"]), str(project["core_product"]))
+    if not cards:
+        return {"candidate_ids": []}
+    created_ids: list[str] = []
+    with connect() as connection:
+        source_ids: dict[str, str] = {}
+        for source in source_map.values():
+            existing = row_dict(connection.execute(
+                "SELECT id FROM source_records WHERE project_id = ? AND source_ref = ?", (project["id"], source.url)
+            ).fetchone())
+            source_id = existing["id"] if existing else new_id()
+            if not existing:
+                connection.execute(
+                    "INSERT INTO source_records (id, project_id, field_note_id, media_asset_id, source_type, source_ref, content, created_at) VALUES (?, ?, NULL, NULL, 'public_web', ?, ?, ?)",
+                    (source_id, project["id"], source.url, json_value({"title": source.title, "excerpt": source.excerpt, "authority": source.authority}), now()),
+                )
+            source_ids[source.url] = source_id
+        for card in cards:
+            existing_candidate = row_dict(connection.execute(
+                "SELECT id FROM candidates WHERE project_id = ? AND type = ? AND title = ? AND content = ?",
+                (project["id"], card.type, card.title, card.content),
+            ).fetchone())
+            candidate_id = existing_candidate["id"] if existing_candidate else new_id()
+            if not existing_candidate:
+                connection.execute(
+                    "INSERT INTO candidates VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    (candidate_id, project["id"], json_value([]), card.type, card.title, card.content, now()),
+                )
+                claim_id = new_id()
+                linked_source_ids = [source_ids[url] for url in card.source_urls if url in source_ids]
+                connection.execute(
+                    "INSERT INTO claims (id, project_id, field_note_id, statement, claim_type, status, risk, public_allowed, source_record_ids_json, created_at, updated_at) VALUES (?, ?, NULL, ?, 'cultural_research', 'pending', ?, 0, ?, ?, ?)",
+                    (claim_id, project["id"], card.content, card.risk, json_value(linked_source_ids), now(), now()),
+                )
+                connection.execute("INSERT INTO candidate_claims (candidate_id, claim_id) VALUES (?, ?)", (candidate_id, claim_id))
+                created_ids.append(candidate_id)
+            for url in card.source_urls:
+                if url in source_ids:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO candidate_source_records (candidate_id, source_record_id) VALUES (?, ?)",
+                        (candidate_id, source_ids[url]),
+                    )
+    return {"candidate_ids": created_ids}

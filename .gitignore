@@ -42,3 +42,15 @@ frontend/.swc-*.hdr
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+# Local browser sessions, visual checks, and automated test run artifacts
+.runtime-logs/
+.test-tmp/
+playwright-report/
+test-results/
+coverage/
+htmlcov/
+
+# Test/tool caches
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
