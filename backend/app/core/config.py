@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     media_directory: str = "data/media"
     visitor_cookie_name: str = "visitor_token"
     visitor_ttl_days: int = 7
+    auth_cookie_name: str = "auth_token"
+    auth_session_ttl_days: int = 30
+    auth_cookie_secure: bool = False
     max_upload_bytes: int = 10 * 1024 * 1024
     ai_runtime_mode: str = "demo"
     openai_next_base_url: str = "https://api.openai-next.com/v1"

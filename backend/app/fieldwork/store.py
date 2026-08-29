@@ -30,10 +30,18 @@ def initialize_database() -> None:
               id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL,
               expires_at TEXT NOT NULL, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS users (
+              id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,
+              password_hash TEXT NOT NULL, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+              id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL,
+              expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS projects (
               id TEXT PRIMARY KEY, visitor_id TEXT NOT NULL, brand_name TEXT NOT NULL,
               industry TEXT NOT NULL, core_product TEXT NOT NULL, origin TEXT NOT NULL,
-              category TEXT, consent_at TEXT NOT NULL, status TEXT NOT NULL,
+              category TEXT, consent_at TEXT NOT NULL, status TEXT NOT NULL, owner_user_id TEXT,
               created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS sessions (
@@ -169,6 +177,7 @@ def initialize_database() -> None:
         # readable for inspection; every newly created project receives the
         # current visitor id.
         _ensure_column(connection, "projects", "visitor_id", "TEXT")
+        _ensure_column(connection, "projects", "owner_user_id", "TEXT")
         # The earliest local demo database also predates the optional product
         # category field.  Creating a new project must migrate that database
         # before inserting the submitted category, instead of leaking SQLite's
@@ -194,6 +203,8 @@ def initialize_database() -> None:
         _ensure_column(connection, "brand_manuals", "current_version_id", "TEXT")
         _ensure_column(connection, "brand_manuals", "generated_snapshot_json", "TEXT NOT NULL DEFAULT '{}'")
         _migrate_legacy_archive_claims(connection)
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_projects_owner_user_id ON projects(owner_user_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id)")
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

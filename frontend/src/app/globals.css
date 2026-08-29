@@ -177,3 +177,12 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 @media (prefers-reduced-motion:reduce){
   .sidebar,.sidebar .stage,.primary-button,.secondary-button,.text-button,.upload-button{transition:none!important}
 }
+
+/* Account controls follow the archive's restrained paper-and-ink language. */
+.account-summary{display:grid;gap:5px;margin:16px 0 12px;padding:13px 0;border-top:1px solid rgba(255,253,247,.3);color:var(--paper-high,#faf7ef)}
+.account-summary small{color:rgba(255,253,247,.72);font-size:11px;letter-spacing:.08em}.account-summary strong{overflow:hidden;font-size:13px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}.account-summary .secondary-button{justify-self:start;min-height:36px;padding:9px 12px}.account-summary .text-button{justify-self:start;color:var(--paper-high,#faf7ef);font-size:12px}
+.auth-dialog{position:relative;width:min(450px,calc(100vw - 32px));padding:28px;border:1px solid var(--border,#c9c0af);border-radius:10px;background:var(--paper-elevated,#faf7ef);color:var(--ink,#272923)}
+.auth-dialog h2{margin:7px 42px 7px 0;font-size:29px;letter-spacing:-.035em}.auth-dialog>p:not(.eyebrow){margin:0;color:var(--muted,#706d63);font-size:14px;line-height:1.7}.auth-dialog .modal-close{position:absolute;top:16px;right:16px}.auth-tabs{display:flex;gap:4px;margin:22px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--border-soft,#ddd5c7)}
+.auth-tabs button{min-height:36px;padding:8px 13px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted,#706d63);cursor:pointer;font-weight:600}.auth-tabs button.is-active{border-bottom-color:var(--forest,#405746);color:var(--forest,#405746)}
+.auth-dialog form{display:grid;gap:14px}.auth-dialog label{display:grid;gap:7px;font-size:14px;font-weight:600}.auth-dialog input{width:100%;min-height:42px;padding:10px 12px;border:1px solid var(--border,#c9c0af);border-radius:6px;background:var(--paper-elevated,#faf7ef);color:var(--ink,#272923);font:inherit}.auth-dialog input:focus{border-color:var(--forest,#405746);outline:3px solid color-mix(in srgb,var(--forest,#405746) 22%,transparent)}.auth-dialog label small{color:var(--muted,#706d63);font-size:12px;font-weight:400}.auth-dialog footer{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
+@media(max-width:767px){.account-summary{margin:18px 0 0;border-top-color:rgba(255,253,247,.28)}.auth-dialog{width:calc(100vw - 24px);padding:23px 20px}.auth-dialog footer{align-items:stretch;flex-direction:column-reverse}.auth-dialog footer button{width:100%}}

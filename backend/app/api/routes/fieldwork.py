@@ -1,10 +1,11 @@
 import hashlib
+import base64
 from urllib.parse import unquote
 import asyncio
 import json
 import secrets
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -47,6 +48,18 @@ class SessionCreate(BaseModel):
     project_id: str
 
 
+class Credentials(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if "@" not in value or value.startswith("@") or value.endswith("@"):
+            raise ValueError("请输入有效的邮箱地址")
+        return value
+
 def envelope(data: Any) -> dict[str, Any]:
     return {"data": data, "request_id": new_id()}
 
@@ -56,6 +69,123 @@ def fail(status: int, message: str, code: str = "invalid_request", field: str | 
     if field:
         detail["field"] = field
     raise HTTPException(status_code=status, detail=detail)
+
+
+def auth_expiry() -> str:
+    return (datetime.now(UTC) + timedelta(days=settings.auth_session_ttl_days)).isoformat()
+
+
+def hash_password(password: str) -> str:
+    """Store a self-describing scrypt hash; the password itself never leaves this function."""
+    salt = secrets.token_bytes(16)
+    n, r, p = 2**14, 8, 1
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p)
+    return "$".join((
+        "scrypt", str(n), str(r), str(p),
+        base64.urlsafe_b64encode(salt).decode(), base64.urlsafe_b64encode(digest).decode(),
+    ))
+
+
+def password_matches(password: str, password_hash: str) -> bool:
+    try:
+        algorithm, raw_n, raw_r, raw_p, raw_salt, raw_digest = password_hash.split("$")
+        if algorithm != "scrypt":
+            return False
+        salt = base64.urlsafe_b64decode(raw_salt.encode())
+        expected = base64.urlsafe_b64decode(raw_digest.encode())
+        actual = hashlib.scrypt(password.encode(), salt=salt, n=int(raw_n), r=int(raw_r), p=int(raw_p))
+        return secrets.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def issue_auth_session(response: Response, user_id: str) -> None:
+    token = secrets.token_urlsafe(32)
+    with connect() as connection:
+        connection.execute(
+            "INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            (new_id(), user_id, hashlib.sha256(token.encode()).hexdigest(), auth_expiry(), now()),
+        )
+    response.set_cookie(
+        key=settings.auth_cookie_name, value=token, httponly=True, samesite="lax",
+        secure=settings.auth_cookie_secure, max_age=settings.auth_session_ttl_days * 24 * 60 * 60,
+    )
+
+
+def current_user(auth_token: Annotated[str | None, Cookie()] = None) -> dict[str, Any] | None:
+    if not auth_token:
+        return None
+    with connect() as connection:
+        user = row_dict(connection.execute(
+            """SELECT users.id, users.email, users.created_at
+               FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id
+               WHERE auth_sessions.token_hash = ? AND auth_sessions.expires_at > ?""",
+            (hashlib.sha256(auth_token.encode()).hexdigest(), now()),
+        ).fetchone())
+    return user
+
+
+def migrate_visitor_projects(connection: Any, visitor_id: str | None, user_id: str) -> None:
+    if visitor_id:
+        connection.execute(
+            "UPDATE projects SET owner_user_id = ? WHERE visitor_id = ? AND owner_user_id IS NULL",
+            (user_id, visitor_id),
+        )
+
+
+@router.post("/auth/register")
+def register(
+    payload: Credentials, response: Response,
+    visitor_token: Annotated[str | None, Cookie()] = None,
+) -> dict[str, Any]:
+    password_hash = hash_password(payload.password)
+    with connect() as connection:
+        existing = connection.execute("SELECT id FROM users WHERE email = ?", (payload.email,)).fetchone()
+        if existing:
+            fail(409, "该邮箱已注册，请直接登录", "email_registered", "email")
+        user_id = new_id()
+        created_at = now()
+        connection.execute("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)", (user_id, payload.email, password_hash, created_at))
+        visitor_id = None
+        if visitor_token:
+            visitor = connection.execute("SELECT id FROM visitors WHERE token_hash = ? AND expires_at > ?", (hashlib.sha256(visitor_token.encode()).hexdigest(), now())).fetchone()
+            visitor_id = visitor["id"] if visitor else None
+        migrate_visitor_projects(connection, visitor_id, user_id)
+    issue_auth_session(response, user_id)
+    return envelope({"id": user_id, "email": payload.email, "created_at": created_at})
+
+
+@router.post("/auth/login")
+def login(
+    payload: Credentials, response: Response,
+    visitor_token: Annotated[str | None, Cookie()] = None,
+) -> dict[str, Any]:
+    with connect() as connection:
+        user = row_dict(connection.execute("SELECT * FROM users WHERE email = ?", (payload.email,)).fetchone())
+        if not user or not password_matches(payload.password, user["password_hash"]):
+            fail(401, "邮箱或密码不正确", "invalid_credentials")
+        visitor_id = None
+        if visitor_token:
+            visitor = connection.execute("SELECT id FROM visitors WHERE token_hash = ? AND expires_at > ?", (hashlib.sha256(visitor_token.encode()).hexdigest(), now())).fetchone()
+            visitor_id = visitor["id"] if visitor else None
+        migrate_visitor_projects(connection, visitor_id, user["id"])
+    issue_auth_session(response, user["id"])
+    return envelope({"id": user["id"], "email": user["email"], "created_at": user["created_at"]})
+
+
+@router.post("/auth/logout")
+def logout(response: Response, auth_token: Annotated[str | None, Cookie()] = None) -> dict[str, Any]:
+    if auth_token:
+        with connect() as connection:
+            connection.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (hashlib.sha256(auth_token.encode()).hexdigest(),))
+    response.delete_cookie(key=settings.auth_cookie_name)
+    return envelope({"status": "logged_out"})
+
+
+@router.get("/auth/me")
+def get_current_user(auth_token: Annotated[str | None, Cookie()] = None) -> dict[str, Any]:
+    user = current_user(auth_token)
+    return envelope(user)
 
 
 @router.post("/visitors")
@@ -88,24 +218,34 @@ def create_or_restore_visitor(
     return envelope({"id": visitor_id, "expires_at": expires_at, "restored": False})
 
 
-def current_visitor(visitor_token: Annotated[str | None, Cookie()] = None) -> dict[str, Any]:
-    if not visitor_token:
-        fail(401, "请先建立临时项目", "visitor_required")
-    token_hash = hashlib.sha256(visitor_token.encode()).hexdigest()
-    with connect() as connection:
-        visitor = row_dict(connection.execute(
-            "SELECT * FROM visitors WHERE token_hash = ? AND expires_at > ?", (token_hash, now())
-        ).fetchone())
-    if not visitor:
-        fail(401, "访客会话已过期，请重新开始", "visitor_expired")
-    return visitor
+def current_visitor(
+    visitor_token: Annotated[str | None, Cookie()] = None,
+    auth_token: Annotated[str | None, Cookie()] = None,
+) -> dict[str, Any]:
+    user = current_user(auth_token)
+    visitor = None
+    if visitor_token:
+        with connect() as connection:
+            visitor = row_dict(connection.execute(
+                "SELECT * FROM visitors WHERE token_hash = ? AND expires_at > ?", (hashlib.sha256(visitor_token.encode()).hexdigest(), now())
+            ).fetchone())
+    if user:
+        return {"kind": "user", "id": user["id"], "email": user["email"], "visitor_id": visitor["id"] if visitor else None}
+    if visitor:
+        return {"kind": "visitor", "id": visitor["id"], "visitor_id": visitor["id"]}
+    fail(401, "请先建立临时项目或登录", "identity_required")
 
 
 def project_for_visitor(project_id: str, visitor: dict[str, Any]) -> dict[str, Any]:
     with connect() as connection:
-        project = row_dict(connection.execute(
-            "SELECT * FROM projects WHERE id = ? AND visitor_id = ? AND status != 'deleted'", (project_id, visitor["id"])
-        ).fetchone())
+        if visitor["kind"] == "user":
+            project = row_dict(connection.execute(
+                "SELECT * FROM projects WHERE id = ? AND owner_user_id = ? AND status != 'deleted'", (project_id, visitor["id"])
+            ).fetchone())
+        else:
+            project = row_dict(connection.execute(
+                "SELECT * FROM projects WHERE id = ? AND visitor_id = ? AND owner_user_id IS NULL AND status != 'deleted'", (project_id, visitor["id"])
+            ).fetchone())
     if not project:
         fail(404, "找不到该品牌项目", "project_not_found")
     return project
@@ -130,10 +270,10 @@ def create_project(payload: ProjectCreate, visitor: Annotated[dict[str, Any], De
         project_id = new_id()
         timestamp = now()
         connection.execute(
-            """INSERT INTO projects (id, visitor_id, brand_name, industry, core_product, origin, category, consent_at, status, current_stage, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'fieldwork', ?, ?)""",
-            (project_id, visitor["id"], payload.brand_name, payload.industry, payload.core_product, payload.origin,
-             payload.category, timestamp, timestamp, timestamp),
+            """INSERT INTO projects (id, visitor_id, owner_user_id, brand_name, industry, core_product, origin, category, consent_at, status, current_stage, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'fieldwork', ?, ?)""",
+            (project_id, visitor.get("visitor_id") or f"account:{visitor['id']}", visitor["id"] if visitor["kind"] == "user" else None,
+             payload.brand_name, payload.industry, payload.core_product, payload.origin, payload.category, timestamp, timestamp, timestamp),
         )
         project = row_dict(connection.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
     return envelope(project)
@@ -143,13 +283,11 @@ def create_project(payload: ProjectCreate, visitor: Annotated[dict[str, Any], De
 def list_projects(visitor: Annotated[dict[str, Any], Depends(current_visitor)]) -> dict[str, Any]:
     """Return the visitor's own projects for the archive project directory."""
     with connect() as connection:
-        projects = [
-            row_dict(row)
-            for row in connection.execute(
-                "SELECT * FROM projects WHERE visitor_id = ? AND status != 'deleted' ORDER BY updated_at DESC, created_at DESC",
-                (visitor["id"],),
-            )
-        ]
+        if visitor["kind"] == "user":
+            rows = connection.execute("SELECT * FROM projects WHERE owner_user_id = ? AND status != 'deleted' ORDER BY updated_at DESC, created_at DESC", (visitor["id"],))
+        else:
+            rows = connection.execute("SELECT * FROM projects WHERE visitor_id = ? AND owner_user_id IS NULL AND status != 'deleted' ORDER BY updated_at DESC, created_at DESC", (visitor["id"],))
+        projects = [row_dict(row) for row in rows]
     return envelope(projects)
 
 
@@ -186,7 +324,10 @@ def delete_project(project_id: str, visitor: Annotated[dict[str, Any], Depends(c
         connection.execute("DELETE FROM field_notes WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)", (project_id,))
         connection.execute("DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)", (project_id,))
         connection.execute("DELETE FROM sessions WHERE project_id = ?", (project_id,))
-        connection.execute("DELETE FROM projects WHERE id = ? AND visitor_id = ?", (project_id, visitor["id"]))
+        if visitor["kind"] == "user":
+            connection.execute("DELETE FROM projects WHERE id = ? AND owner_user_id = ?", (project_id, visitor["id"]))
+        else:
+            connection.execute("DELETE FROM projects WHERE id = ? AND visitor_id = ? AND owner_user_id IS NULL", (project_id, visitor["id"]))
 
     media_root = Path(settings.media_directory).resolve()
     for storage_key in [*media_keys, *export_keys]:

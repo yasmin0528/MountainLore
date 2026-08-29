@@ -5,7 +5,7 @@ SQLite 默认位于 `data/mountainlore.db`，媒体位于 `data/media`；运行�
 ## 闭环
 
 ```text
-Project → Session / Message / MediaAsset
+User (optional for anonymous use) → Project → Session / Message / MediaAsset
   → FieldNote → SourceRecord → Claim
   → Candidate → ArchiveCard ↔ Claim
   → Task(route_generation) → BrandDirection × 2
@@ -26,6 +26,8 @@ Project → Session / Message / MediaAsset
 
 | 阶段 | 接口 | 服务端保证 |
 |---|---|---|
+| 账号 | `POST /auth/register` | 创建邮箱密码账号；将当前浏览器尚未归属账号的采风项目迁入该账号 |
+| 账号 | `POST /auth/login`、`POST /auth/logout`、`GET /auth/me` | 使用 HttpOnly 会话 Cookie 跨设备恢复项目目录；登录仍会合并当前浏览器匿名项目 |
 | 访客 | `POST /visitors` | HttpOnly Cookie 恢复当前浏览器项目；项目与媒体按访客隔离 |
 | 建档 | `POST /projects` | 保存品牌、产业、产品、产地和授权状态 |
 | 采风 | `POST /sessions` | 每项目一个可恢复采风会话 |
@@ -72,3 +74,9 @@ npm run build
 ```
 
 闭环测试覆盖事实公开边界、确认编志幂等、固定两版、选择路线生成手册、图片失败保留文字、Logo 持久化、PDF/ZIP 可打开、分享快照不可变和访客权限隔离。
+
+## 登录 MVP 边界
+
+- 邮箱与密码（至少 8 个字符）是唯一登录方式；密码使用 scrypt 哈希保存，明文不会进入数据库或日志。
+- 会话有效期默认 30 天，可由 `AUTH_SESSION_TTL_DAYS` 配置。生产 HTTPS 环境必须设 `AUTH_COOKIE_SECURE=true`。
+- 此 MVP 不包含邮箱验证、找回密码、多因素认证或团队协作；上线前应补充隐私政策和数据删除流程。

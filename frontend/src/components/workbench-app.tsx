@@ -9,6 +9,7 @@ import { BrandManualResult, type ManualVisualPreferences } from "@/components/br
 import { FailureToast } from "@/components/failure-toast";
 
 export type Project = { id: string; brand_name: string; industry: string; core_product: string; origin: string; current_stage?: string; current_direction_id?: string; status?: string };
+type Account = { id: string; email: string; created_at: string };
 type Session = { id: string; status: string; started_at: string; field_notes: Note[]; messages: Message[] };
 type Message = { id: string; role: "assistant" | "user" | "system"; content: string };
 type Note = { id: string; type: string; title: string; summary: string; sequence: number };
@@ -116,6 +117,8 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const [launchMaterialPickerOpen, setLaunchMaterialPickerOpen] = useState(false);
   const [demoMode, setDemoMode] = useState(initialDemo);
   const [demoReason, setDemoReason] = useState<string | null>(null);
+  const [account, setAccount] = useState<Account | null>(null);
+  const [authOpen, setAuthOpen] = useState(false);
   const [archiveModal, setArchiveModal] = useState<"cards" | null>(null);
   const [directionDraft, setDirectionDraft] = useState<Direction | null>(() => initialDirectionDraft ? demoSeed?.directions[0] ?? null : null);
   const [tideReport, setTideReport] = useState<TideReport | null>(null);
@@ -136,6 +139,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   useEffect(() => {
     if (initialDemo) return;
     void api<{ data: unknown }>("/visitors", { method: "POST" }).then(async () => {
+      try { const me = await api<{ data: Account | null }>("/auth/me"); setAccount(me.data); } catch { /* Anonymous fieldwork remains available when auth is unavailable. */ }
       try { const directory = await api<{ data: Project[] }>("/projects"); setProjectDirectory(directory.data); } catch { /* workspace loading still works with an older backend */ }
       const saved = window.localStorage.getItem("mountainlore-project-id");
       if (!saved) return;
@@ -207,6 +211,32 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     if (!id) return;
     const response = await api<{ data: Workspace }>(`/projects/${id}/workspace`);
     setWorkspace(response.data); setProject(response.data.project); setSession(response.data.session ?? null);
+  }
+  async function authenticate(mode: "login" | "register", email: string, password: string) {
+    setBusy(true); setError(null);
+    try {
+      await api("/visitors", { method: "POST" });
+      const response = await api<{ data: Account }>(`/auth/${mode}`, { method: "POST", body: JSON.stringify({ email, password }) });
+      setAccount(response.data); setAuthOpen(false);
+      const directory = await api<{ data: Project[] }>("/projects");
+      setProjectDirectory(directory.data);
+      const saved = window.localStorage.getItem("mountainlore-project-id");
+      if (saved) {
+        try { await refreshWorkspace(saved); } catch { window.localStorage.removeItem("mountainlore-project-id"); }
+      }
+    } catch (caught) { setError(errorText(caught)); throw caught; }
+    finally { setBusy(false); }
+  }
+  async function logout() {
+    setBusy(true); setError(null);
+    try {
+      await api("/auth/logout", { method: "POST" }); setAccount(null);
+      const directory = await api<{ data: Project[] }>("/projects"); setProjectDirectory(directory.data);
+      if (project && !directory.data.some((item) => item.id === project.id)) {
+        setProject(null); setWorkspace(null); setSession(null); window.localStorage.removeItem("mountainlore-project-id"); setScreen("project-directory");
+      }
+    } catch (caught) { setError(errorText(caught)); }
+    finally { setBusy(false); }
   }
   async function openProject(nextProject: Project) {
     if (demoMode) {
@@ -377,6 +407,9 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
         <button type="button" className={`stage mobile-archive-stage ${["project-directory", "archive", "assets"].includes(screen) ? "stage-current" : ""}`} onClick={() => navigate("project-directory")}><b>04</b><span>档案</span></button>
       </nav>
       <div className="sidebar-spacer" />
+      <section className="account-summary" aria-label="账号">
+        {account ? <><small>已登录</small><strong title={account.email}>{account.email}</strong><button className="text-button" disabled={busy} onClick={logout}>退出登录</button></> : <><small>跨设备保存</small><button className="secondary-button" onClick={() => setAuthOpen(true)}>登录 / 注册</button></>}
+      </section>
       <button className={`project-chip ${["project-directory", "archive", "assets"].includes(screen) ? "archive-current" : ""}`} onClick={() => navigate("project-directory")}><i aria-hidden="true" /><span>档案</span><small>{project?.brand_name ?? "品牌项目目录"}</small></button>
     </aside>
     <main className="workspace"><header className="mobile-workspace-bar"><button ref={mobileNavTriggerRef} type="button" className="mobile-project-mark" aria-label={mobileNavOpen ? "收起导航菜单" : "打开导航菜单"} aria-expanded={mobileNavOpen} aria-controls="mobile-workspace-navigation" onClick={() => mobileNavOpen ? closeMobileNav() : setMobileNavOpen(true)}>{projectMark}</button><span>{mobileScreenTitles[screen]}</span></header>{demoMode && <aside className="demo-banner" role="status"><span>{demoReason ? `真实后端暂不可用（${demoReason}），已载入演示数据。` : "演示数据模式：档案、观潮来源与出山结果均为模拟内容，仅供检查页面和交互。"}</span><button className="text-button" onClick={() => window.location.reload()}>重试真实服务</button></aside>}
@@ -394,9 +427,22 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       {archiveModal === "cards" && workspace && <ArchiveFolioDialog project={workspace.project} cards={workspace.archive_cards} onClose={() => setArchiveModal(null)} onEdit={(card) => { setEditing(card); setArchiveModal(null); }} />}
       {directionDraft && workspace && <DirectionDraftDialog project={workspace.project} direction={directionDraft} busy={busy} onClose={() => setDirectionDraft(null)} onConfirm={async () => { if (await selectDirection(directionDraft.id)) setDirectionDraft(null); }} />}
       {editing && <div className="modal-backdrop"><section className="finish-dialog" role="dialog" aria-modal="true"><p className="eyebrow">编辑档案</p><input value={editing.title} onChange={(event) => setEditing({ ...editing, title: event.target.value })} /><textarea value={editing.content} onChange={(event) => setEditing({ ...editing, content: event.target.value })} /><footer><button className="secondary-button" onClick={() => setEditing(null)}>取消</button><button className="primary-button" disabled={busy} onClick={saveCard}>保存</button></footer></section></div>}
+      {authOpen && <AuthDialog busy={busy} onClose={() => setAuthOpen(false)} onSubmit={authenticate} />}
       {!project && screen !== "setup" && screen !== "project-directory" && <Empty title={screen === "tide" ? "先完成采风并确认档案，才能开始真实观潮" : screen === "launch" ? "先完成采风并确认档案，才能生成出山概念稿" : "先建立品牌档案"} action={() => setScreen("setup")} actionLabel="去采风" />}
     </main><FailureToast message={error} onDismiss={() => setError(null)} />
   </div>;
+}
+
+function AuthDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () => void; onSubmit: (mode: "login" | "register", email: string, password: string) => Promise<void> }) {
+  const [mode, setMode] = useState<"login" | "register">("register");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setLocalError(null);
+    try { await onSubmit(mode, email, password); } catch (caught) { setLocalError(errorText(caught)); }
+  };
+  return <div className="modal-backdrop" role="presentation"><section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"><button type="button" className="modal-close" aria-label="关闭账号窗口" onClick={onClose}>×</button><p className="eyebrow">账号与档案</p><h2 id="account-dialog-title">{mode === "register" ? "保存你的田野记录" : "回到你的田野记录"}</h2><p>登录后可在其他设备继续查看和编辑已采风的品牌档案。</p><div className="auth-tabs" role="tablist" aria-label="账号操作"><button type="button" role="tab" aria-selected={mode === "register"} className={mode === "register" ? "is-active" : ""} onClick={() => setMode("register")}>注册</button><button type="button" role="tab" aria-selected={mode === "login"} className={mode === "login" ? "is-active" : ""} onClick={() => setMode("login")}>登录</button></div><form onSubmit={submit}><label>邮箱<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>密码<input type="password" autoComplete={mode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required /><small>至少 8 个字符</small></label>{localError && <p className="form-error" role="alert">{localError}</p>}<footer><button type="button" className="secondary-button" onClick={onClose}>暂不登录</button><button className="primary-button" disabled={busy}>{busy ? "正在处理…" : mode === "register" ? "注册并保存" : "登录"}</button></footer></form></section></div>;
 }
 
 function Setup({ form, setForm, busy, onSubmit, onDemo }: { form: SetupForm; setForm: Dispatch<SetStateAction<SetupForm>>; busy: boolean; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onDemo: () => void }) {

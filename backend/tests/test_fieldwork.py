@@ -114,3 +114,32 @@ def test_delete_project_removes_the_visitor_owned_project(tmp_path, monkeypatch)
         assert deleted.json()["data"]["status"] == "deleted"
         assert client.get("/api/projects").json()["data"] == []
         assert client.get(f"/api/projects/{created['id']}").status_code == 404
+
+
+def test_register_adopts_anonymous_projects_and_login_restores_them_on_another_client(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "accounts.db"
+    monkeypatch.setattr(settings, "database_path", str(database))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+
+    with TestClient(app) as anonymous_client:
+        anonymous_client.post("/api/visitors")
+        project = anonymous_client.post(
+            "/api/projects",
+            json={"brand_name": "待保存的采风", "industry": "刺梨", "core_product": "原汁", "origin": "贵州", "consent": True},
+        ).json()["data"]
+        registered = anonymous_client.post(
+            "/api/auth/register", json={"email": "field@example.com", "password": "secure-pass-8"}
+        )
+        assert registered.status_code == 200
+        assert anonymous_client.get("/api/auth/me").json()["data"]["email"] == "field@example.com"
+        assert [item["id"] for item in anonymous_client.get("/api/projects").json()["data"]] == [project["id"]]
+
+    with TestClient(app) as returning_client:
+        login = returning_client.post(
+            "/api/auth/login", json={"email": "field@example.com", "password": "secure-pass-8"}
+        )
+        assert login.status_code == 200
+        restored = returning_client.get("/api/projects").json()["data"]
+        assert [item["id"] for item in restored] == [project["id"]]
+        assert returning_client.post("/api/auth/logout").status_code == 200
+        assert returning_client.get("/api/auth/me").json()["data"] is None

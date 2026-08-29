@@ -10,6 +10,11 @@ Only the frontend receives a public domain. The backend stores its SQLite
 database and all uploaded/generated media below `/app/data`, which must be a
 Railway Volume mounted at that exact path.
 
+The same Volume also stores MVP user accounts and login sessions.  Login is
+email-and-password only; passwords are scrypt hashes, while browser sessions
+are HttpOnly cookies.  No mail provider is required for this MVP, so password
+reset and email verification are intentionally not included.
+
 ## 1. Create the backend service
 
 1. In Railway, create a service from this repository and set **Root Directory**
@@ -18,7 +23,8 @@ Railway Volume mounted at that exact path.
    needed.
 3. Add a Volume with mount path `/app/data`.
 4. Paste `backend.env.example` into Variables, replacing the frontend origin
-   when a frontend domain exists. Keep AI keys in sealed variables.
+   when a frontend domain exists. Keep `AUTH_COOKIE_SECURE=true` for Railway's
+   HTTPS domain, and keep AI keys in sealed variables.
 5. Do **not** generate a public domain for this service.
 
 ## 2. Create the frontend service
@@ -37,6 +43,9 @@ Railway Volume mounted at that exact path.
 1. Open the frontend URL and create a project with an image upload.
 2. Redeploy the backend service.
 3. Reopen the frontend URL: the project and uploaded image must still exist.
+4. Register an account, then sign out and sign back in: the existing project
+   must appear in the project directory.  The first registration/login adopts
+   anonymous projects from that browser into the signed-in account.
 
 The frontend proxies browser `/api/*` requests server-side to the private
 backend. It therefore keeps the existing visitor cookie same-origin and never
