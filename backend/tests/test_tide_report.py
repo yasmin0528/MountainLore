@@ -1,0 +1,96 @@
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from fastapi.testclient import TestClient
+
+from app.core.config import settings
+from app.fieldwork.store import initialize_database
+from app.main import app
+from app.services.providers import WeeklyTideIdea, WeeklyTideSource, provider
+from app.services.tide_report import VerifiedSource, is_allowed_source_url, latest_report_for_project, refresh_weekly_tide_report
+import app.services.tide_report as tide_report
+
+
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+
+def _seed_positioned_project(client: TestClient) -> str:
+    client.post("/api/visitors")
+    project = client.post(
+        "/api/projects",
+        json={"brand_name": "见山刺梨", "industry": "刺梨", "core_product": "刺梨原汁", "origin": "贵州龙里", "category": "刺梨", "consent": True},
+    ).json()["data"]
+    session = client.post("/api/sessions", json={"project_id": project["id"]}).json()["data"]
+    client.post(f"/api/sessions/{session['id']}/messages", json={"content": "鲜果当天加工，邻居会来帮忙。", "media_asset_ids": []})
+    candidate = client.post(f"/api/sessions/{session['id']}/finish").json()["data"]["candidates"][0]
+    client.post(f"/api/candidates/{candidate['id']}/confirm")
+    route = client.post(f"/api/projects/{project['id']}/directions", json={}).json()["data"]["routes"][0]
+    client.post(f"/api/directions/{route['id']}/select")
+    return project["id"]
+
+
+def _weekly_sources() -> list[WeeklyTideSource]:
+    return [
+        WeeklyTideSource(f"https://www.foodaily.com/a{i}", "industry", "Foodaily", f"行业来源 {i}", "2026-08-20")
+        for i in range(1, 7)
+    ]
+
+
+def _weekly_ideas(sources: list[dict[str, str]]) -> list[WeeklyTideIdea]:
+    return [
+        WeeklyTideIdea(f"灵感 {index}", "内容母题", "通勤与朋友小聚", "中秋前的分享场景", "仅作创意角度", [source["url"]])
+        for index, source in enumerate(sources, start=1)
+    ]
+
+
+def test_weekly_report_is_verified_shared_and_keeps_previous_success(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "tide-report.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    initialize_database()
+    monkeypatch.setattr(provider, "weekly_tide_candidates", _weekly_sources)
+    monkeypatch.setattr(provider, "weekly_tide_ideas", lambda sources, holidays: _weekly_ideas(sources))
+    monkeypatch.setattr(
+        tide_report,
+        "verify_weekly_source",
+        lambda candidate: VerifiedSource(candidate.url, candidate.url, candidate.channel, candidate.publisher, candidate.title, candidate.published_at),
+    )
+    first = refresh_weekly_tide_report(datetime(2026, 8, 31, 9, tzinfo=SHANGHAI))
+    assert first == {"status": "succeeded", "week_key": "2026-08-31", "idea_count": 6}
+    assert refresh_weekly_tide_report(datetime(2026, 8, 31, 10, tzinfo=SHANGHAI))["status"] == "already_attempted"
+
+    monkeypatch.setattr(provider, "weekly_tide_candidates", lambda: _weekly_sources()[:4])
+    failed = refresh_weekly_tide_report(datetime(2026, 9, 7, 9, tzinfo=SHANGHAI))
+    assert failed["status"] == "failed"
+    report = latest_report_for_project("any-positioned-project")
+    assert report["edition"]["week_key"] == "2026-08-31"
+    assert len(report["edition"]["ideas"]) == 6
+
+
+def test_tide_report_api_favorite_use_and_generation_snapshot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "tide-api.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+    initialize_database()
+    monkeypatch.setattr(provider, "weekly_tide_candidates", _weekly_sources)
+    monkeypatch.setattr(provider, "weekly_tide_ideas", lambda sources, holidays: _weekly_ideas(sources))
+    monkeypatch.setattr(tide_report, "verify_weekly_source", lambda candidate: VerifiedSource(candidate.url, candidate.url, candidate.channel, candidate.publisher, candidate.title, candidate.published_at))
+    refresh_weekly_tide_report(datetime(2026, 8, 31, 9, tzinfo=SHANGHAI))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    with TestClient(app) as client:
+        project_id = _seed_positioned_project(client)
+        report = client.get(f"/api/projects/{project_id}/tide-report").json()["data"]
+        idea_id = report["edition"]["ideas"][0]["id"]
+        assert client.post(f"/api/projects/{project_id}/tide-report-ideas/{idea_id}/favorite").json()["data"]["favorite"] == 1
+        used = client.post(f"/api/projects/{project_id}/tide-report-ideas/{idea_id}/use").json()["data"]
+        assert used["id"] == idea_id
+        job = client.post(f"/api/projects/{project_id}/generation-jobs", json={"template_type": "xiaohongshu", "inspiration_card_id": idea_id}).json()["data"]
+        assert job["input_snapshot"]["inspiration"]["id"] == idea_id
+
+
+def test_weekly_source_allowlist_rejects_non_public_and_non_https() -> None:
+    assert is_allowed_source_url("https://www.foodaily.com/article/1")
+    assert is_allowed_source_url("https://www.xiaohongshu.com/explore/1")
+    assert not is_allowed_source_url("http://www.foodaily.com/article/1")
+    assert not is_allowed_source_url("https://example.com/article/1")

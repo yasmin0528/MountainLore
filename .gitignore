@@ -20,3 +20,25 @@ backend/data/
 __pycache__/
 .pytest_cache/
 *.py[cod]
+
+# Development logs
+*.log
+
+# Temporary files
+*.tmp
+*.hdr
+
+# Next.js / SWC download artifacts
+frontend/.next-*.tgz
+frontend/.next-download-parts/
+frontend/.next-download-parts-v2/
+frontend/.next-segment.tmp
+frontend/.next-verified-segment.*
+frontend/.swc-*.tgz
+frontend/.swc-*.tmp
+frontend/.swc-*.hdr
+
+# Local databases
+data/*.db
+data/*.sqlite
+data/*.sqlite3

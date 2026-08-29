@@ -11,7 +11,7 @@ type Project = { id: string; brand_name: string; industry: string; core_product:
 type Candidate = { id: string; type: string; title: string; content: string; status: "pending" | "confirmed" | "discarded" };
 type UploadItem = { id: string; name: string; status: "uploading" | "ready" | "failed"; assetId?: string; preview: string; file: File; error?: string };
 
-const productOptions = ["刺梨", "酸汤", "辣椒", "贵州茶", "抹茶", "蓝莓", "猕猴桃"];
+const productOptions = ["刺梨", "酸汤", "辣椒", "贵州茶", "抹茶", "蓝莓", "猕猴桃","自定义"];
 const stickerByProduct: Record<string, string> = {
   "刺梨": "sticker-cili.png", "酸汤": "sticker-sour-soup.png", "辣椒": "sticker-chili.png",
   "贵州茶": "sticker-tea.png", "抹茶": "sticker-matcha.png", "蓝莓": "sticker-blueberry.png",
@@ -167,13 +167,12 @@ export default function FieldworkApp() {
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="产品流程">
-        <div className="brand-lockup"><span>ML</span><div><strong>MountainLore</strong><small>山风风物志</small></div></div>
+        <div className="brand-lockup"><span>贵品</span><div><strong>贵品风物志</strong></div></div>
         <p className="sidebar-label">今日田野</p>
         <nav>
           {["采风", "编志", "定调", "观潮", "出山"].map((label, index) => <div className={`stage ${index === 0 ? "stage-current" : ""}`} key={label}><b>0{index + 1}</b><span>{label}</span></div>)}
         </nav>
         <div className="project-chip"><i aria-hidden="true" />{project?.brand_name ?? "尚未建立项目"}</div>
-        <p className="sidebar-foot">FIELDWORK / P0</p>
       </aside>
       <main className="workspace">
         {step === "setup" && <SetupView form={form} setForm={setForm} busy={busy} error={formError} onSubmit={startFieldwork} />}

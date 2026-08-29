@@ -17,6 +17,18 @@ class Settings(BaseSettings):
     visitor_cookie_name: str = "visitor_token"
     visitor_ttl_days: int = 7
     max_upload_bytes: int = 10 * 1024 * 1024
+    ai_runtime_mode: str = "demo"
+    openai_next_base_url: str = "https://api.openai-next.com/v1"
+    openai_next_api_key: str = ""
+    openai_next_text_model: str = "gpt-5.5"
+    openai_next_tide_model: str = "sonar"
+    openai_next_image_base_url: str = "https://draw.openai-next.com/v1"
+    openai_next_image_api_key: str = ""
+    openai_next_image_model: str = "gpt-image-2"
+    provider_timeout_seconds: int = 45
+    tide_refresh_interval_seconds: int = 60
+    tide_source_verify_timeout_seconds: int = 12
+    tide_source_max_results: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -39,6 +51,10 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on", "development", "debug"}
+
+    @property
+    def resolved_image_api_key(self) -> str:
+        return self.openai_next_image_api_key or self.openai_next_api_key
 
 
 @lru_cache

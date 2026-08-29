@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+import asyncio
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,13 +9,26 @@ from fastapi.responses import JSONResponse
 from app.api.router import api_router
 from app.core.config import settings
 from app.fieldwork.store import initialize_database
+from app.services.workflow import recover_tasks
+from app.services.tide_report import weekly_tide_refresh_loop
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Reserve a single place for startup and shutdown resources."""
     initialize_database()
-    yield
+    recover_tasks()
+    stop_event = asyncio.Event()
+    refresh_task = asyncio.create_task(weekly_tide_refresh_loop(stop_event), name="weekly-tide-refresh")
+    try:
+        yield
+    finally:
+        stop_event.set()
+        refresh_task.cancel()
+        try:
+            await refresh_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(

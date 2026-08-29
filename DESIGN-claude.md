@@ -1,7 +1,7 @@
 ---
 version: 1.0
-name: MountainLore-design-system
-description: "MountainLore / 山风风物志的数字民族志田野志设计系统。以真实人物、地点、物产与地方记忆为主体；以安静、可检索、可持续书写的当代 Web App 为目标。它不是企业 SaaS 后台、文旅宣传页或复古拟物界面。"
+name: guipin-wind-lore-design-system
+description: "贵品风物志的数字民族志田野志设计系统。以真实人物、地点、物产与地方记忆为主体；以安静、可检索、可持续书写的当代 Web App 为目标。它不是企业 SaaS 后台、文旅宣传页或复古拟物界面。"
 
 colors:
   paper: "#F2EDDF"
@@ -34,25 +34,25 @@ colors:
 
 typography:
   display-xl:
-    fontFamily: "Noto Serif SC, Source Han Serif SC, STSong, Songti SC, serif"
+    fontFamily: "Source Han Serif SC (self-hosted), STSong, Songti SC, SimSun, serif"
     fontSize: 56px
     fontWeight: 500
     lineHeight: 1.14
     letterSpacing: -0.8px
   display-lg:
-    fontFamily: "Noto Serif SC, Source Han Serif SC, STSong, Songti SC, serif"
+    fontFamily: "Source Han Serif SC (self-hosted), STSong, Songti SC, SimSun, serif"
     fontSize: 42px
     fontWeight: 500
     lineHeight: 1.2
     letterSpacing: -0.5px
   display-md:
-    fontFamily: "Noto Serif SC, Source Han Serif SC, STSong, Songti SC, serif"
+    fontFamily: "Source Han Serif SC (self-hosted), STSong, Songti SC, SimSun, serif"
     fontSize: 32px
     fontWeight: 500
     lineHeight: 1.25
     letterSpacing: -0.3px
   display-sm:
-    fontFamily: "Noto Serif SC, Source Han Serif SC, STSong, Songti SC, serif"
+    fontFamily: "Source Han Serif SC (self-hosted), STSong, Songti SC, SimSun, serif"
     fontSize: 24px
     fontWeight: 500
     lineHeight: 1.35
@@ -269,11 +269,11 @@ components:
 
 ---
 
-# MountainLore「山风风物志」设计系统
+# 贵品风物志设计系统
 
 ## 1. 产品与设计意图
 
-MountainLore 是面向山地农产品与地方品牌孵化的 AI Agent。核心流程为：**采风 → 编志 → 定调 → 观潮 → 出山**。界面应像一本持续被采集、校对与编纂的数字田野志：用户留下照片、语音、对话与经历，AI 协助追问、归档、提炼并转化为品牌资产。
+贵品风物志是面向山地农产品与地方品牌孵化的 AI Agent。核心流程为：**采风 → 编志 → 定调 → 观潮 → 出山**。界面应像一本持续被采集、校对与编纂的数字田野志：用户留下照片、语音、对话与经历，AI 协助追问、归档、提炼并转化为品牌资产。
 
 **Field first。** 真实的照片、人物、地点、日期、原话和物产优先于装饰。信息应可被阅读、追溯和引用。
 
@@ -305,7 +305,7 @@ MountainLore 是面向山地农产品与地方品牌孵化的 AI Agent。核心�
 
 ## 3. 字体与排版
 
-标题使用 `{typography.display-*}` 的中文宋体/Serif，正文和交互使用 `{typography.body-*}` 的现代中文无衬线。英文名称、日期、编号与元数据可采用 Serif + Sans 的混排。优先加载 Noto/Source Han 字体；不可用时按 token 的系统回退顺序降级，不能用装饰性书法字体替代正文。
+标题使用自托管的 Source Han Serif SC（思源宋体）及 `{typography.display-*}` token；正文和交互保持 `{typography.body-*}` 的现代中文无衬线。英文名称、日期、编号与元数据可采用 Serif + Sans 的混排。标题加载失败时按 `STSong`、`Songti SC`、`SimSun`、`serif` 顺序降级，不能用装饰性书法字体替代正文。
 
 | 层级 | Token | 使用 |
 |---|---|---|
@@ -330,7 +330,7 @@ MountainLore 是面向山地农产品与地方品牌孵化的 AI Agent。核心�
 
 ### 侧栏导航
 
-保留现代 SaaS 侧栏。顶部显示 **MountainLore / 山风**，下方为“今日田野”和带编号的流程：`01 采风`、`02 编志`、`03 定调`、`04 观潮`、`05 出山`。项目区使用小状态点与项目名，例如 `● 贵州刺梨`。
+保留现代 SaaS 侧栏。顶部显示 **贵品风物志**，主导航只显示：`01 采风`、`02 观潮`、`03 出山`。编志与定调仍是业务流程中的必要步骤，但作为采风完成后的自动连续界面出现，不在侧栏设置独立入口。桌面端侧栏应固定在视口左侧，页面内容切换或纵向滚动不得改变其位置；项目区使用小状态点与项目名，例如 `● 贵州刺梨`。
 
 当前项使用细色线、文字颜色或浅色底，不使用整块高饱和彩色底。桌面侧栏宽 240px；移动端收至抽屉，打开后应锁定背景滚动并将焦点移入菜单。
 
@@ -354,6 +354,7 @@ MountainLore 是面向山地农产品与地方品牌孵化的 AI Agent。核心�
 **Documentary photography first。** 优先级依次为：用户真实上传照片、地方环境纪实、人物劳动与生活、农产品/土地/植物细节、地图/扫描件/手稿、极少量辅助插画。
 
 - 照片保持自然色温，不使用高饱和滤镜、商业棚拍感或 AI 梦幻效果。
+- 同一组物产贴图使用统一的容器尺寸、`object-fit: contain` 与居中基线；贴图可以随展示层级改变容器尺寸，但不能因源图比例不同而被裁切或产生跳动。
 - 可加入极轻颗粒或纸色底，但不可模拟发黄破损的旧纸，也不可用老化滤镜掩盖低质量素材。
 - 统一使用 `object-fit: cover`；记录原始比例，重要图像允许在详情页完整展示。
 - 每张非纯装饰图片都必须带 caption：描述、地点/日期（已知时）与来源/版权状态。

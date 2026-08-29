@@ -1,6 +1,9 @@
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from app.fieldwork.store import initialize_database
 from app.main import app
 
 
@@ -62,3 +65,28 @@ def test_fieldwork_single_session_and_candidate_confirmation(tmp_path, monkeypat
         confirmed = client.post(f"/api/candidates/{candidate['id']}/confirm")
         assert confirmed.status_code == 200
         assert confirmed.json()["data"]["candidate"]["status"] == "confirmed"
+
+
+def test_legacy_projects_table_is_migrated_before_creating_a_project(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "legacy.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """CREATE TABLE projects (
+                id TEXT PRIMARY KEY, brand_name TEXT NOT NULL, industry TEXT NOT NULL,
+                core_product TEXT NOT NULL, origin TEXT NOT NULL,
+                product_category TEXT, current_stage TEXT NOT NULL,
+                current_route_id TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )"""
+        )
+    monkeypatch.setattr(settings, "database_path", str(database))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    initialize_database()
+
+    with TestClient(app) as client:
+        client.post("/api/visitors")
+        response = client.post(
+            "/api/projects",
+            json={"brand_name": "迁移测试", "industry": "刺梨", "core_product": "刺梨原汁", "origin": "贵州", "consent": True},
+        )
+    assert response.status_code == 200
