@@ -142,17 +142,12 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   }
 
   useEffect(() => {
+    window.localStorage.removeItem("mountainlore-project-id");
     void api<{ data: unknown }>("/visitors", { method: "POST" }).then(async () => {
       setVisitorReady(true);
       if (initialDemo) return;
       try { const me = await api<{ data: Account | null }>("/auth/me"); setAccount(me.data); } catch { /* Anonymous fieldwork remains available when auth is unavailable. */ }
       try { const directory = await api<{ data: Project[] }>("/projects"); setProjectDirectory(directory.data); } catch { /* workspace loading still works with an older backend */ }
-      const saved = window.localStorage.getItem("mountainlore-project-id");
-      if (!saved) return;
-      try {
-        const response = await api<{ data: Workspace }>(`/projects/${saved}/workspace`);
-        setWorkspace(response.data); setProject(response.data.project); setSession(response.data.session ?? null); setScreen(stageToScreen(response.data.project.current_stage, response.data.project.status, Boolean(response.data.session)));
-      } catch { window.localStorage.removeItem("mountainlore-project-id"); }
     }).catch((caught) => setError(`真实后端暂不可用（${errorText(caught)}）。请检查服务后重试。`));
   }, [initialDemo]);
 
