@@ -125,7 +125,7 @@ def test_evidence_bound_async_closed_loop_and_delivery(tmp_path: Path, monkeypat
         export_result = wait_task(client, export_task["id"])
         assert export_result["status"] == "succeeded"
         exported = {item["format"]: client.get(item["download_url"]).content for item in export_result["result"]["exports"]}
-        assert len(PdfReader(io.BytesIO(exported["pdf"])).pages) == 10
+        assert len(PdfReader(io.BytesIO(exported["pdf"])).pages) == 14
         with zipfile.ZipFile(io.BytesIO(exported["zip"])) as archive:
             assert {"brand-manual.json", "brand-manual.pdf"}.issubset(archive.namelist())
 

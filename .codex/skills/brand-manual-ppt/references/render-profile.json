@@ -1,0 +1,13 @@
+{"skill":"brand-manual-ppt","version":1,"renderFormats":["pdf"],"slides":[
+{"id":"cover","label":"首页","kind":"cover","title":"brand_name","titleFallback":"品牌视觉手册","body":"slogan","bodyFallback":"品牌手册"},
+{"id":"overview","label":"一页总览 · 策略建议","kind":"text","title":"brand_one_liner","titleFallback":"品牌一句话","body":"brand_introduction","bodyFallback":"品牌的核心定位与使用理由。"},
+{"id":"archive","label":"品牌档案","kind":"text","title":"brand_name","titleFallback":"品牌档案","body":"brand_introduction","bodyFallback":"待补证据：主体、产品与可公开产地范围。"},
+{"id":"positioning","label":"品牌定位 · 策略建议","kind":"text","title":"brand_strategy.audience","titleFallback":"目标人群","body":"brand_strategy.scenarios","bodyFallback":"待补证据：关键消费场景。"},
+{"id":"story","label":"故事主线 · 策略建议","kind":"text","title":"story_system.main_story","titleFallback":"品牌故事主线","body":"story_spine","bodyFallback":"待补证据：可公开的品牌故事材料。"},
+{"id":"voice","label":"语言风格 · 策略建议","kind":"text","title":"voice.do","titleFallback":"品牌声音","body":"voice.dont","bodyFallback":"用具体、克制且可追溯的方式表达。"},
+{"id":"logo","label":"标志方向 · 策略建议","kind":"logo","title":"visual_system.logo_direction","titleFallback":"无文字图形方向","body":"logo_design","bodyFallback":"未上传正式 Logo 时仅展示概念方向。"},
+{"id":"visual","label":"视觉总览 · 策略建议","kind":"text","title":"visual_system.keywords","titleFallback":"视觉关键词","body":"visual_system.packaging","bodyFallback":"以在地材料和可复用的信息层级组织视觉。"},
+{"id":"system","label":"色彩与字体","kind":"system","title":"font_label","titleFallback":"字体与颜色方案","body":"color_palette","bodyFallback":"待补证据：最终色彩与字体授权。"},
+{"id":"packaging","label":"包装与图形 · 策略建议","kind":"text","title":"visual_system.packaging","titleFallback":"包装主视觉","body":"visual_system.pattern","bodyFallback":"从经确认的产地、原料或工具线索抽取纹样。"},
+{"id":"applications","label":"应用延展 · 策略建议","kind":"text","title":"applications","titleFallback":"核心应用","body":"disclaimer","bodyFallback":"先完成核心包装与内容触点，再扩展延展物料。"}],
+"repeat":{"source":"selling_points","limit":3,"labelTemplate":"卖点 {index} · {evidence}","kind":"point","title":"category","titleFallback":"待补证据","body":"explanation","bodyFallback":"该卖点需要补充可公开的事实依据。"}}
