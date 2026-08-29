@@ -17,6 +17,11 @@ import httpx
 from app.core.config import settings
 
 
+# `None` is a meaningful httpx timeout value (no deadline), so a sentinel is
+# needed to retain the normal provider timeout for callers that do not opt in.
+_DEFAULT_REQUEST_TIMEOUT = object()
+
+
 class ProviderError(RuntimeError):
     def __init__(self, code: str, message: str, *, retriable: bool = True):
         self.code = code
@@ -111,6 +116,17 @@ class CreditsProvider:
     def live(self) -> bool:
         return settings.ai_runtime_mode.lower() == "live"
 
+    @property
+    def brand_generation_timeout(self) -> httpx.Timeout | None:
+        """Return the explicitly configured timeout for persisted brand jobs.
+
+        These jobs are asynchronous and recoverable after a restart.  Their
+        default therefore has no client-side deadline; a deployment can still
+        set BRAND_GENERATION_TIMEOUT_SECONDS to a positive value if desired.
+        """
+        seconds = settings.brand_generation_timeout_seconds
+        return httpx.Timeout(seconds) if seconds else None
+
     def readiness(self) -> dict[str, Any]:
         configured = bool(settings.openai_next_api_key)
         tide_configured = settings.tide_configured
@@ -154,6 +170,7 @@ class CreditsProvider:
     def chat_json(
         self, *, model: str, instruction: str, context: dict[str, Any],
         image_paths: list[str] | None = None,
+        timeout: httpx.Timeout | None | object = _DEFAULT_REQUEST_TIMEOUT,
     ) -> dict[str, Any]:
         return self._chat_json(
             model=model,
@@ -163,6 +180,7 @@ class CreditsProvider:
             api_key=settings.openai_next_api_key,
             missing_key_message="请先配置 OPENAI_NEXT_API_KEY",
             image_paths=image_paths,
+            timeout=timeout,
         )
 
     def tide_chat_json(
@@ -183,6 +201,7 @@ class CreditsProvider:
         self, *, model: str, instruction: str, context: dict[str, Any], base_url: str,
         api_key: str, missing_key_message: str, image_paths: list[str] | None = None,
         temperature: float | None = 0.45,
+        timeout: httpx.Timeout | None | object = _DEFAULT_REQUEST_TIMEOUT,
     ) -> dict[str, Any]:
         if not self.live:
             raise ProviderError("demo_mode", "演示模式未调用真实模型")
@@ -210,7 +229,8 @@ class CreditsProvider:
         if temperature is not None:
             payload["temperature"] = temperature
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            client_timeout = self.timeout if timeout is _DEFAULT_REQUEST_TIMEOUT else timeout
+            with httpx.Client(timeout=client_timeout) as client:
                 response = client.post(
                     f"{base_url.rstrip('/')}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -385,7 +405,10 @@ class CreditsProvider:
         except httpx.HTTPError:
             return False
 
-    def generate_image(self, prompt: str, reference_images: list[str] | None = None) -> dict[str, str]:
+    def generate_image(
+        self, prompt: str, reference_images: list[str] | None = None,
+        *, timeout: httpx.Timeout | None | object = _DEFAULT_REQUEST_TIMEOUT,
+    ) -> dict[str, str]:
         if not self.live:
             raise ProviderError("demo_mode", "演示模式未调用真实图片服务")
         key = settings.resolved_image_api_key
@@ -401,7 +424,9 @@ class CreditsProvider:
         if reference_images:
             payload["image"] = reference_images[:4]
         try:
-            with httpx.Client(timeout=httpx.Timeout(max(settings.provider_timeout_seconds, 90))) as client:
+            default_timeout = httpx.Timeout(max(settings.provider_timeout_seconds, 90))
+            client_timeout = default_timeout if timeout is _DEFAULT_REQUEST_TIMEOUT else timeout
+            with httpx.Client(timeout=client_timeout) as client:
                 response = client.post(
                     f"{settings.openai_next_image_base_url.rstrip('/')}/images/generations",
                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json=payload,

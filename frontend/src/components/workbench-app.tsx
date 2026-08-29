@@ -97,6 +97,8 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
   const [archiveModal, setArchiveModal] = useState<"cards" | null>(null);
   const [directionDraft, setDirectionDraft] = useState<Direction | null>(() => initialDirectionDraft ? demoSeed?.directions[0] ?? null : null);
   const [tideReport, setTideReport] = useState<TideReport | null>(null);
+  const [projectPendingDelete, setProjectPendingDelete] = useState<Project | null>(null);
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
 
   function loadDemoWorkspace(reason?: unknown) {
     const demo = createDemoWorkspace();
@@ -149,6 +151,16 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       .catch((caught) => setError(errorText(caught)));
   }, [demoMode, project, screen]);
 
+  useEffect(() => {
+    if (!projectPendingDelete) return;
+    deleteCancelRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) setProjectPendingDelete(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [busy, projectPendingDelete]);
+
   async function refreshWorkspace(id = project?.id) {
     if (demoMode) return;
     if (!id) return;
@@ -167,8 +179,9 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
     catch (caught) { setError(errorText(caught)); }
     finally { setBusy(false); }
   }
-  async function deleteProject(target: Project) {
-    if (!window.confirm(`确认永久删除“${target.brand_name}”吗？其采风记录、档案与品牌资产将无法恢复。`)) return;
+  async function deleteProject() {
+    const target = projectPendingDelete;
+    if (!target) return;
     setBusy(true); setError(null);
     try {
       if (!demoMode) await api(`/projects/${target.id}`, { method: "DELETE" });
@@ -179,7 +192,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
         setScreen("project-directory");
       }
     } catch (caught) { setError(errorText(caught)); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProjectPendingDelete(null); }
   }
 
   async function start(event: FormEvent<HTMLFormElement>) {
@@ -313,7 +326,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       {screen === "setup" && <Setup form={form} setForm={setForm} busy={busy} onSubmit={start} onDemo={loadDemoWorkspace} />}
       {screen === "interview" && project && session && <Interview project={project} session={session} answer={answer} setAnswer={setAnswer} uploads={uploads} busy={busy} onFiles={uploadFiles} onSend={sendMessage} onFinish={finishFieldwork} />}
       {screen === "candidates" && <Candidates candidates={candidates} confirmed={confirmedCount} busy={busy} onResolve={resolveCandidate} onContinue={confirmChronicle} />}
-      {screen === "project-directory" && <ProjectDirectory projects={projectDirectory} onSelect={openProject} onDelete={deleteProject} onCreate={() => setScreen("setup")} />}
+      {screen === "project-directory" && <ProjectDirectory projects={projectDirectory} onSelect={openProject} onDelete={setProjectPendingDelete} onCreate={() => setScreen("setup")} />}
       {screen === "archive" && workspace && <BrandMaterials workspace={workspace} onOpenArchive={() => setArchiveModal("cards")} onOpenManual={() => setScreen("manual")} onOpenRecords={() => setScreen("assets")} />}
       {screen === "assets" && workspace && <AssetHistory workspace={workspace} onBack={() => setScreen("archive")} onLaunch={() => navigate("launch")} />}
       {screen === "chronicle" && workspace && <Chronicle workspace={workspace} task={latestRouteTask} onRetry={retryTask} onOpenArchive={() => setArchiveModal("cards")} />}
@@ -324,6 +337,7 @@ export default function WorkbenchApp({ initialDemo = false, initialScreen = "arc
       {archiveModal === "cards" && workspace && <ArchiveFolioDialog project={workspace.project} cards={workspace.archive_cards} onClose={() => setArchiveModal(null)} onEdit={(card) => { setEditing(card); setArchiveModal(null); }} />}
       {directionDraft && workspace && <DirectionDraftDialog project={workspace.project} direction={directionDraft} busy={busy} onClose={() => setDirectionDraft(null)} onConfirm={async () => { if (await selectDirection(directionDraft.id)) setDirectionDraft(null); }} />}
       {editing && <div className="modal-backdrop"><section className="finish-dialog" role="dialog" aria-modal="true"><p className="eyebrow">编辑档案</p><input value={editing.title} onChange={(event) => setEditing({ ...editing, title: event.target.value })} /><textarea value={editing.content} onChange={(event) => setEditing({ ...editing, content: event.target.value })} /><footer><button className="secondary-button" onClick={() => setEditing(null)}>取消</button><button className="primary-button" disabled={busy} onClick={saveCard}>保存</button></footer></section></div>}
+      {projectPendingDelete && <div className="project-delete-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setProjectPendingDelete(null); }}><section className="project-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-project-title" aria-describedby="delete-project-description"><h2 id="delete-project-title">您确定要删除“{projectPendingDelete.brand_name}”吗？</h2><p id="delete-project-description">将立即删除此品牌项目。您不能撤销此操作。</p><footer><button ref={deleteCancelRef} className="secondary-button" disabled={busy} onClick={() => setProjectPendingDelete(null)}>取消</button><button className="danger-button" disabled={busy} onClick={() => void deleteProject()}>{busy ? "正在删除…" : "删除"}</button></footer></section></div>}
       {!project && screen !== "setup" && screen !== "project-directory" && <Empty title={screen === "tide" ? "先完成采风并确认档案，才能开始真实观潮" : screen === "launch" ? "先完成采风并确认档案，才能生成出山概念稿" : "先建立品牌档案"} action={() => setScreen("setup")} actionLabel="去采风" />}
     </main><FailureToast message={error} onDismiss={() => setError(null)} />
   </div>;
