@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, createRequestId, encodeFileNameForHeader } from "@/lib/api";
 import type { ArchiveCard, Claim, Direction, ManualAsset, ManualVersion, Project, Workspace } from "@/components/workbench-app";
 
@@ -58,6 +59,7 @@ export function ArchiveFolioDialog({ project, cards, busy, onClose, onSave, onDe
   const active = cards.filter((card) => card.status === "active");
   const [selectedId, setSelectedId] = useState(active[0]?.id ?? "");
   const [draft, setDraft] = useState<ArchiveCard | null>(null);
+  const [mounted, setMounted] = useState(false);
   const selected = active.find((card) => card.id === selectedId) ?? active[0];
   const selectedIndex = selected ? active.indexOf(selected) : 0;
   const editing = draft?.id === selected?.id;
@@ -66,13 +68,15 @@ export function ArchiveFolioDialog({ project, cards, busy, onClose, onSave, onDe
   function startEditing() { if (selected) setDraft({ ...selected }); }
   async function saveDraft() { if (draft && await onSave(draft)) setDraft(null); }
   function requestDelete() { if (selected) onDeleteRequest(selected); }
-  return <div className="archive-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  useEffect(() => { setMounted(true); }, []);
+  const dialog = <div className="archive-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="archive-folio-dialog" role="dialog" aria-modal="true" aria-label={`${project.brand_name} 档案卡`}>
       <button className="folio-mobile-close" aria-label="关闭档案卡" onClick={onClose}>×</button>
       <aside className="folio-rail"><header><strong>档案卡</strong><small>点击抽换</small></header><div className="folio-tabs">{active.map((card, index) => <button key={card.id} className={`folio-sidecard sidecard-${index % 3} ${card.id === selected?.id ? "is-selected" : ""}`} onClick={() => selectCard(card)} aria-pressed={card.id === selected?.id}><i>{cardLabel(card, index).slice(0, 1)}</i><span><b>{cardLabel(card, index)}</b><small>{card.type}</small></span></button>)}</div><footer><b>{project.origin}档案</b><small>{String(selectedIndex + 1).padStart(2, "0")} / {String(active.length).padStart(2, "0")}</small></footer></aside>
       <article className="folio-paper">{selected ? <><header><p className="eyebrow">品牌档案 · 风物本</p><h2>{project.brand_name}</h2><p>{project.origin} · {active.length} 项已确认资料</p><button className="modal-close" aria-label="关闭档案卡" onClick={onClose}>×</button></header><div className="folio-sheet-stack"><i className="folio-underlay layer-one" /><i className="folio-underlay layer-two" /><section className={`folio-sheet sheet-${selectedIndex % 3} ${editing ? "is-editing" : ""}`} key={selected.id}><p className="folio-number">{String(selectedIndex + 1).padStart(2, "0")}</p><p className="folio-section-name">{cardLabel(selected, selectedIndex)}</p>{editing ? <label className="folio-edit-title"><span className="sr-only">资料标题</span><input aria-label="资料标题" value={editable?.title ?? ""} onChange={(event) => editable && setDraft({ ...editable, title: event.target.value })} /></label> : <h3>{selected.title}</h3>}{editing ? <label className="folio-edit-content"><span className="sr-only">资料正文</span><textarea aria-label="资料正文" value={editable?.content ?? ""} onChange={(event) => editable && setDraft({ ...editable, content: event.target.value })} /></label> : <p>{selected.content}</p>}<footer>{editing ? <><button className="text-button" disabled={busy} onClick={() => setDraft(null)}>取消编辑</button><button className="primary-button folio-save-button" disabled={busy || !(editable?.title.trim()) || !(editable?.content.trim())} onClick={() => void saveDraft()}>{busy ? "保存中…" : "保存修改"}</button></> : <button className="text-button" onClick={startEditing}>编辑这张资料</button>}{<button className="text-button" disabled={busy} onClick={requestDelete}>删除这张卡</button>}</footer></section></div></> : <><button className="modal-close" aria-label="关闭档案卡" onClick={onClose}>×</button><div className="empty-state"><p>尚无已确认资料。</p></div></>}</article>
     </section>
   </div>;
+  return mounted ? createPortal(dialog, document.body) : null;
 }
 
 function toDraft(project: Project, manual: ManualContent | undefined, current?: Direction): ManualContent {

@@ -323,3 +323,7 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 
 /* The archival paper surface continues to the full height of the right-hand workspace. */
 .workspace{min-height:100dvh}
+
+/* 档案详情脱离工作区排版，始终以页面中央浮窗呈现。 */
+.archive-modal-backdrop{z-index:1000}
+.archive-folio-dialog{max-height:calc(100dvh - 56px);overflow:auto}
