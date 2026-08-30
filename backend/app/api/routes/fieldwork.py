@@ -142,7 +142,7 @@ def register(
     with connect() as connection:
         existing = connection.execute("SELECT id FROM users WHERE email = ?", (payload.email,)).fetchone()
         if existing:
-            fail(409, "璇ラ偖绠卞凡娉ㄥ唽锛岃鐩存帴鐧诲綍", "email_registered", "email")
+            fail(409, "该邮箱已注册，请直接登录", "email_registered", "email")
         user_id = new_id()
         created_at = now()
         connection.execute("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)", (user_id, payload.email, password_hash, created_at))
@@ -163,7 +163,7 @@ def login(
     with connect() as connection:
         user = row_dict(connection.execute("SELECT * FROM users WHERE email = ?", (payload.email,)).fetchone())
         if not user or not password_matches(payload.password, user["password_hash"]):
-            fail(401, "閭鎴栧瘑鐮佷笉姝ｇ‘", "invalid_credentials")
+            fail(401, "邮箱或密码不正确", "invalid_credentials")
         visitor_id = None
         if visitor_token:
             visitor = connection.execute("SELECT id FROM visitors WHERE token_hash = ? AND expires_at > ?", (hashlib.sha256(visitor_token.encode()).hexdigest(), now())).fetchone()
