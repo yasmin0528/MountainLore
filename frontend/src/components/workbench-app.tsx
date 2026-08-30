@@ -86,10 +86,10 @@ const launchPromptTemplates = [
   { label: "线下亮相", note: "市集、展会与陈列", text: `请为【市集 / 展会 / 快闪活动】准备一套线下亮相方案。目标是在【活动地点】让初次接触的人快速理解品牌与产品；请给出主视觉线索、现场陈列重点、可带走的信息与一条现场短句。${multimodalPromptGuide}` },
 ];
 const materialTemplates: MaterialTemplate[] = [
-  { id: "sticker", label: "品牌贴纸", note: "多规格贴纸组合", image: "/guipin/launch-materials/brand-stickers.png", alt: "自然光下的空白品牌贴纸样机" },
-  { id: "gift-box", label: "礼盒包装", note: "开合式礼盒正面", image: "/guipin/launch-materials/gift-box.png", alt: "自然光下的空白礼盒样机" },
-  { id: "can", label: "罐装包装", note: "空白样机待补" },
-  { id: "expo-banner", label: "展会易拉宝", note: "现场立牌版式参考", image: "/guipin/launch-materials/expo-banner.png", alt: "自然光下的空白展会立牌样机" },
+  { id: "sticker", label: "品牌贴纸", note: "多规格贴纸组合", image: "/guipin/launch-materials/material-brand-sticker-preview.png", alt: "山景窗边的刺梨饮品与手提包装概念图" },
+  { id: "gift-box", label: "礼盒包装", note: "开合式礼盒正面", image: "/guipin/launch-materials/material-gift-box-preview.png", alt: "深蓝色贵州红茶礼盒与内装概念图" },
+  { id: "can", label: "罐装包装", note: "红黄双罐调味料包装", image: "/guipin/launch-materials/material-can-preview.png", alt: "红黄双罐山里灶火调味料包装概念图" },
+  { id: "expo-banner", label: "展会易拉宝", note: "现场立牌版式参考", image: "/guipin/launch-materials/material-expo-banner-preview.png", alt: "山货集市现场的黔岭风物易拉宝概念图" },
 ];
 
 function errorText(error: unknown) {
