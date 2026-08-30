@@ -31,6 +31,7 @@ type TideReport = { edition: { id: string; scope: "shared" | "personal"; status:
 export type Job = { id: string; template_type: string; status: string; result: Record<string, unknown>; error_code?: string; regeneration_used: number };
 type GenerationPreview = { id: string; template_type: "peripheral" | "xiaohongshu"; status: string; inspiration_text: string; result: Record<string, unknown> };
 type GenerationOverlayKind = "manual" | "manual_asset" | "launch";
+type AuthStatus = "checking" | "authenticated" | "anonymous" | "unavailable";
 export type Workspace = { project: Project; session?: Session | null; archive_cards: ArchiveCard[]; claims?: Claim[]; directions: Direction[]; tasks?: WorkflowTask[]; manual?: { content: Record<string, unknown>; current_version_id?: string }; manual_versions?: ManualVersion[]; manual_assets?: ManualAsset[]; exports?: Array<{ id: string; format: string; download_url?: string }>; shares?: Array<{ id: string; revoked_at?: string; created_at: string }>; tide_searches: Tide[]; generation_jobs: Job[] };
 type Screen = "home" | "setup" | "interview" | "candidates" | "project-directory" | "archive" | "assets" | "chronicle" | "directions" | "manual" | "tide" | "launch";
 type SetupForm = { brand_name: string; industry: string; core_product: string; origin: string; category: string; consent: boolean };
@@ -140,6 +141,7 @@ export default function WorkbenchApp() {
 
 
   const [account, setAccount] = useState<Account | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authOpen, setAuthOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [deleteCardTarget, setDeleteCardTarget] = useState<ArchiveCard | null>(null);
@@ -161,9 +163,22 @@ export default function WorkbenchApp() {
     window.localStorage.removeItem("mountainlore-project-id");
     void api<{ data: unknown }>("/visitors", { method: "POST" }).then(async () => {
       setVisitorReady(true);
-      try { const me = await api<{ data: Account | null }>("/auth/me"); setAccount(me.data); } catch { /* Anonymous fieldwork remains available when auth is unavailable. */ }
-      try { const directory = await api<{ data: Project[] }>("/projects"); setProjectDirectory(directory.data); } catch { /* workspace loading still works with an older backend */ }
-    }).catch((caught) => setError(`真实后端暂不可用（${errorText(caught)}）。请检查服务后重试。`));
+      const [meResult, directoryResult] = await Promise.allSettled([
+        api<{ data: Account | null }>("/auth/me"),
+        api<{ data: Project[] }>("/projects"),
+      ]);
+      if (meResult.status === "fulfilled") {
+        setAccount(meResult.value.data);
+        setAuthStatus(meResult.value.data ? "authenticated" : "anonymous");
+      } else {
+        setAuthStatus("unavailable");
+        setError(`账号状态暂时无法恢复（${errorText(meResult.reason)}）。请检查服务后重试。`);
+      }
+      if (directoryResult.status === "fulfilled") setProjectDirectory(directoryResult.value.data);
+    }).catch((caught) => {
+      setAuthStatus("unavailable");
+      setError(`真实后端暂不可用（${errorText(caught)}）。请检查服务后重试。`);
+    });
   }, []);
 
 
@@ -272,7 +287,7 @@ export default function WorkbenchApp() {
     try {
       await api("/visitors", { method: "POST" });
       const response = await api<{ data: Account }>(`/auth/${mode}`, { method: "POST", body: JSON.stringify({ email, password }) });
-      setAccount(response.data); setAuthOpen(false);
+      setAccount(response.data); setAuthStatus("authenticated"); setAuthOpen(false);
       const directory = await api<{ data: Project[] }>("/projects");
       setProjectDirectory(directory.data);
     } catch (caught) { setError(errorText(caught)); throw caught; }
@@ -281,7 +296,7 @@ export default function WorkbenchApp() {
   async function logout() {
     setBusy(true); setError(null);
     try {
-      await api("/auth/logout", { method: "POST" }); setAccount(null);
+      await api("/auth/logout", { method: "POST" }); setAccount(null); setAuthStatus("anonymous");
       const directory = await api<{ data: Project[] }>("/projects"); setProjectDirectory(directory.data);
       if (project && !directory.data.some((item) => item.id === project.id)) {
         setProject(null); setWorkspace(null); setSession(null); setScreen("project-directory");
@@ -508,7 +523,7 @@ export default function WorkbenchApp() {
     ? ["setup", "interview", "candidates", "chronicle", "directions", "manual"].includes(screen)
     : screen === key;
 
-  if (screen === "home") return <><HomePage onStart={() => { setIsTrialCase(false); setScreen("setup"); }} /><FailureToast message={error} onDismiss={() => setError(null)} /></>;
+  if (screen === "home") return <><HomePage account={account} authStatus={authStatus} onStart={() => { setIsTrialCase(false); setScreen("setup"); }} /><FailureToast message={error} onDismiss={() => setError(null)} /></>;
 
   return <div className="app-shell">
     {mobileNavOpen && <button type="button" className="mobile-nav-scrim" aria-label="关闭导航菜单" onClick={() => closeMobileNav()} />}
@@ -552,9 +567,17 @@ export default function WorkbenchApp() {
   </div>;
 }
 
-function HomePage({ onStart }: { onStart: () => void }) {
+function HomePage({ account, authStatus, onStart }: { account: Account | null; authStatus: AuthStatus; onStart: () => void }) {
+  const accountMessage = authStatus === "checking"
+    ? "正在恢复账号状态…"
+    : authStatus === "authenticated"
+      ? `已登录 · ${account?.email}`
+      : authStatus === "unavailable"
+        ? "账号状态暂时无法恢复"
+        : "登录后可跨设备查看已保存档案";
   return <main className="home-page">
     <button type="button" className="home-start-button" onClick={onStart}>开始体验 <span aria-hidden="true">→</span></button>
+    <p className={`home-account-status is-${authStatus}`} role="status" aria-live="polite">{accountMessage}</p>
   </main>;
 }
 
