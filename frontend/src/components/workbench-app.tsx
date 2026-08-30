@@ -380,7 +380,45 @@ export default function WorkbenchApp() {
   async function deleteCard(card: ArchiveCard): Promise<boolean> { setBusy(true); setError(null); try { await api(`/archive-cards/${card.id}`, { method: "DELETE" }); await refreshWorkspace(); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
   async function saveCard(card: ArchiveCard): Promise<boolean> { setBusy(true); setError(null); try { await api(`/archive-cards/${card.id}`, { method: "PATCH", body: JSON.stringify({ title: card.title, content: card.content, expected_content_version: card.content_version }) }); await refreshWorkspace(); return true; } catch (caught) { setError(errorText(caught)); return false; } finally { setBusy(false); } }
   async function createDirections(preferences?: ManualVisualPreferences) { if (!project) return; setGenerationOverlay("manual"); setBusy(true); setError(null); try { await api(`/projects/${project.id}/directions`, { method: "POST", headers: { "Idempotency-Key": createRequestId("directions") }, body: JSON.stringify({ visual_preferences: preferences ?? {} }) }); await refreshWorkspace(); } catch (caught) { setGenerationOverlay(null); setError(errorText(caught)); } finally { setBusy(false); } }
-  async function confirmChronicle() { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/chronicle/confirm`, { method: "POST", headers: { "Idempotency-Key": `chronicle-${project.id}` }, body: JSON.stringify({ request_id: "initial", defer_directions: true }) }); await refreshWorkspace(); setScreen("chronicle"); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
+  async function confirmChronicle() {
+    if (!project) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Culture research can append candidates after the initial list was rendered.
+      // Reconcile with the server before asking it to freeze the chronicle.
+      const latest = await api<{ data: Candidate[] }>(`/projects/${project.id}/candidates`);
+      const latestCandidates = latest.data;
+      setCandidates(latestCandidates);
+      if (latestCandidates.some((candidate) => candidate.status === "pending")) {
+        setError("发现新增候选材料，已同步到页面。请逐张确认入档或弃用后继续。");
+        return;
+      }
+      if (!latestCandidates.some((candidate) => candidate.status === "confirmed")) {
+        setError("请先确认至少一张材料后再编志。");
+        return;
+      }
+      await api(`/projects/${project.id}/chronicle/confirm`, { method: "POST", headers: { "Idempotency-Key": `chronicle-${project.id}` }, body: JSON.stringify({ request_id: "initial", defer_directions: true }) });
+      await refreshWorkspace();
+      setScreen("chronicle");
+    } catch (caught) {
+      // A candidate can be added between the reconciliation and the final request.
+      // Refresh it so the user can resolve the real blocker instead of being left at a stale page.
+      try {
+        const latest = await api<{ data: Candidate[] }>(`/projects/${project.id}/candidates`);
+        if (latest.data.some((candidate) => candidate.status === "pending")) {
+          setCandidates(latest.data);
+          setError("候选材料刚刚更新，已同步到页面。请处理新增材料后继续。");
+          return;
+        }
+      } catch {
+        // Preserve the original API failure if the recovery refresh fails.
+      }
+      setError(errorText(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function saveManual(content: Record<string, unknown>) { if (!project) return; setBusy(true); setError(null); try { await api(`/projects/${project.id}/brand-manual`, { method: "PATCH", body: JSON.stringify({ content_json: content }) }); await refreshWorkspace(); } catch (caught) { setError(errorText(caught)); } finally { setBusy(false); } }
   async function retryTask(id: string) { const task = workspace?.tasks?.find((item) => item.id === id); const overlay = task?.kind === "route_generation" || task?.kind === "manual_generation" ? "manual" : task?.kind === "logo_generation" || task?.kind === "manual_asset_generation" ? "manual_asset" : null; if (overlay) setGenerationOverlay(overlay); setBusy(true); try { await api(`/tasks/${id}/retry`, { method: "POST" }); await refreshWorkspace(); } catch (caught) { setGenerationOverlay(null); setError(errorText(caught)); } finally { setBusy(false); } }
   async function generateManualAsset(kind: "extension_pattern" | "packaging_key_visual") { if (!project) return; setGenerationOverlay("manual_asset"); setBusy(true); try { await api(`/projects/${project.id}/brand-manual/generate-assets/${kind}`, { method: "POST", headers: { "Idempotency-Key": createRequestId(`asset-${kind}`) } }); await refreshWorkspace(); } catch (caught) { setGenerationOverlay(null); setError(errorText(caught)); } finally { setBusy(false); } }
@@ -580,7 +618,7 @@ function Interview({ project, session, answer, setAnswer, uploads, busy, onFiles
 function Candidates({ candidates, confirmed, researching, busy, onResolve, onContinue }: { candidates: Candidate[]; confirmed: number; researching: boolean; busy: boolean; onResolve: (item: Candidate, action: "confirm" | "discard") => void; onContinue: () => void }) {
   const pending = candidates.some((item) => item.status === "pending");
   const authorityLabel: Record<string, string> = { official: "官方资料", academic: "学术资料", cultural_institution: "文博 / 非遗机构", media: "待核验线索" };
-  return <section className="candidate-page"><header className="page-header compact"><p className="eyebrow">采风完成 / 候选确认</p><h1>由你决定哪些材料进入档案</h1><p>{researching ? "正在补充可追溯的产地与产品线索。" : "AI 整理结果不是事实，确认前请核对原始访谈与来源。"}</p></header>{researching ? <section className="candidate-research-wait" role="status"><i aria-hidden="true" /><div><strong>正在翻阅地方资料</strong><p>会把有出处的文化线索和本次采风材料一起交给你确认。</p></div></section> : <><div className="candidate-grid">{candidates.map((item, index) => <article className="candidate-card" key={item.id}><p className="eyebrow">{item.type} / {String(index + 1).padStart(2, "0")}</p><h2>{item.title}</h2><p>{item.content}</p>{item.sources?.length ? <details className="candidate-sources"><summary>来源与依据 · {item.sources.length} 条</summary><ul>{item.sources.map((source) => <li key={source.id}><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><span>{authorityLabel[source.authority] ?? "公开资料"}</span>{source.excerpt && <p>{source.excerpt}</p>}</li>)}</ul></details> : null}{item.risk && item.sources?.length ? <small className={`candidate-risk ${item.risk}`}>{item.risk === "low" ? "来源已记录" : item.risk === "medium" ? "请留意原始语境" : "需谨慎使用"}</small> : null}<footer>{item.status === "pending" ? <><button className="secondary-button" onClick={() => onResolve(item, "discard")}>弃用</button><button className="primary-button" onClick={() => onResolve(item, "confirm")}>确认入档</button></> : <span className={`status ${item.status}`}>{item.status === "confirmed" ? "已确认" : "已弃用"}</span>}</footer></article>)}</div><footer className="candidate-footer"><p>{pending ? "请先处理完每一张候选卡。" : confirmed ? `已有 ${confirmed} 条材料，将归入品牌档案后进入定调。` : "至少确认一张材料后才能编志。"}</p><button className="primary-button" disabled={!confirmed || pending || busy} onClick={onContinue}>{busy ? "正在确认…" : "确认编志并定调"}</button></footer></>}</section>;
+  return <section className="candidate-page"><header className="page-header compact"><p className="eyebrow">采风完成 / 候选确认</p><h1>由你决定哪些材料进入档案</h1><p>{researching ? "正在整理本次采风的品牌档案。" : "AI 整理结果不是事实，确认前请核对原始访谈与来源。"}</p></header>{researching ? <section className="candidate-research-wait" role="status"><i aria-hidden="true" /><div><strong>正在整理品牌档案</strong><p>正在将本次采风材料整理为待确认的品牌档案。</p></div></section> : <><div className="candidate-grid">{candidates.map((item, index) => <article className="candidate-card" key={item.id}><p className="eyebrow">{item.type} / {String(index + 1).padStart(2, "0")}</p><h2>{item.title}</h2><p>{item.content}</p>{item.sources?.length ? <details className="candidate-sources"><summary>来源与依据 · {item.sources.length} 条</summary><ul>{item.sources.map((source) => <li key={source.id}><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><span>{authorityLabel[source.authority] ?? "公开资料"}</span>{source.excerpt && <p>{source.excerpt}</p>}</li>)}</ul></details> : null}{item.risk && item.sources?.length ? <small className={`candidate-risk ${item.risk}`}>{item.risk === "low" ? "来源已记录" : item.risk === "medium" ? "请留意原始语境" : "需谨慎使用"}</small> : null}<footer>{item.status === "pending" ? <><button className="secondary-button" onClick={() => onResolve(item, "discard")}>弃用</button><button className="primary-button" onClick={() => onResolve(item, "confirm")}>确认入档</button></> : <span className={`status ${item.status}`}>{item.status === "confirmed" ? "已确认" : "已弃用"}</span>}</footer></article>)}</div><footer className="candidate-footer"><p>{pending ? "请先处理完每一张候选卡。" : confirmed ? `已有 ${confirmed} 条材料，将归入品牌档案后进入定调。` : "至少确认一张材料后才能编志。"}</p><button className="primary-button" disabled={!confirmed || pending || busy} onClick={onContinue}>{busy ? "正在确认…" : "确认编志并定调"}</button></footer></>}</section>;
 }
 
 function TaskStatus({ task, onRetry }: { task?: WorkflowTask; onRetry: (id: string) => void }) {
