@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = False
     max_upload_bytes: int = 10 * 1024 * 1024
     ai_runtime_mode: str = "demo"
+    # Set this only for short-lived demos.  It disables the per-visitor
+    # product quotas, but never bypasses upstream provider billing or limits.
+    exhibition_unlimited_quota: bool = False
     openai_next_base_url: str = "https://api.openai-next.com/v1"
     openai_next_api_key: str = ""
     openai_next_text_model: str = "gpt-5.5"

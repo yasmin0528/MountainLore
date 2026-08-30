@@ -589,7 +589,7 @@ def create_tide_search(project_id: str, payload: TideCreate, visitor: Annotated[
         current = row_dict(connection.execute("SELECT * FROM brand_directions WHERE id = ?", (context["project"].get("current_direction_id"),)).fetchone())
         if not current:
             fail(422, "请先选择一条品牌路线", "direction_required")
-        if context["project"].get("tide_search_used", 0) >= 2:
+        if not settings.exhibition_unlimited_quota and context["project"].get("tide_search_used", 0) >= 2:
             fail(429, "观潮额度已用完", "tide_quota_exhausted")
         direction = json.loads(current["content_json"])
         query = f"{context['project']['core_product']} {context['project']['origin']} {direction.get('target_audience', '')}"
@@ -797,7 +797,7 @@ def create_generation_preview(
         fail(409, "请先在后端配置 Key，并将 AI_RUNTIME_MODE 设为 live 后再生成预览", "generation_not_configured")
     with connect() as connection:
         context = generation_context(connection, project_id, payload.inspiration_card_id)
-        if context["project"].get("launch_used", 0) >= 2:
+        if not settings.exhibition_unlimited_quota and context["project"].get("launch_used", 0) >= 2:
             fail(429, "出山额度已用完", "launch_quota_exhausted")
         preview_id = new_id()
         generation_input = launch_generation_input(context, payload.template_type, payload.inspiration_text, material_ids)
@@ -831,7 +831,7 @@ def save_generation_preview(preview_id: str, visitor: Annotated[dict[str, Any], 
         if preview["status"] not in {"succeeded", "partial"}:
             fail(409, "这份预览尚未成功生成，不能保存", "preview_not_ready")
         project = row_dict(connection.execute("SELECT * FROM projects WHERE id = ?", (preview["project_id"],)).fetchone())
-        if project.get("launch_used", 0) >= 2:
+        if not settings.exhibition_unlimited_quota and project.get("launch_used", 0) >= 2:
             fail(429, "出山额度已用完", "launch_quota_exhausted")
         job_id = new_id()
         connection.execute("INSERT INTO generation_jobs VALUES (?, ?, ?, NULL, ?, 'succeeded', ?, ?, NULL, 0, ?, ?)", (job_id, preview["project_id"], job_id, preview["template_type"], preview["input_snapshot_json"], preview["result_json"], now(), now()))
@@ -848,7 +848,7 @@ def create_generation(project_id: str, payload: GenerationCreate, visitor: Annot
     project_for_visitor(project_id, visitor)
     with connect() as connection:
         context = generation_context(connection, project_id, payload.inspiration_card_id)
-        if context["project"].get("launch_used", 0) >= 2:
+        if not settings.exhibition_unlimited_quota and context["project"].get("launch_used", 0) >= 2:
             fail(429, "出山额度已用完", "launch_quota_exhausted")
         brief = launch_brief(context, payload.template_type)
         job_id = new_id()
@@ -887,7 +887,7 @@ def regenerate(job_id: str, visitor: Annotated[dict[str, Any], Depends(current_v
         project_for_visitor(job["project_id"], visitor)
         root_id = job["root_job_id"] or job["id"]
         root = row_dict(connection.execute("SELECT * FROM generation_jobs WHERE id = ?", (root_id,)).fetchone())
-        if root["regeneration_used"]:
+        if not settings.exhibition_unlimited_quota and root["regeneration_used"]:
             fail(409, "该任务已经重生成过一次", "regeneration_exhausted")
         connection.execute("UPDATE generation_jobs SET regeneration_used = 1 WHERE id = ?", (root_id,))
     # Reuse the same outward generation path, then neutralize the ordinary
