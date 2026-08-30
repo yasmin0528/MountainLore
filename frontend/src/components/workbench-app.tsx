@@ -453,10 +453,12 @@ export default function WorkbenchApp() {
     finally { setBusy(false); }
   }
   async function waitForGenerationPreview(previewId: string): Promise<GenerationPreview> {
-    for (let attempt = 0; attempt < 150; attempt += 1) {
+    // Text and image generation run as separate provider calls; wait long
+    // enough for both server-side timeouts before reporting a delayed preview.
+    for (let attempt = 0; attempt < 360; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
       const response = await api<{ data: GenerationPreview }>(`/generation-previews/${previewId}`);
-      if (response.data.status === "succeeded") return response.data;
+      if (["succeeded", "partial"].includes(response.data.status)) return response.data;
       if (response.data.status === "failed") {
         throw new Error(String(response.data.result.error_message ?? "图文预览生成失败，请修改提示词后重试。"));
       }
@@ -712,7 +714,8 @@ function LaunchPreviewModal({ preview, busy, onClose, onSave }: { preview: Gener
   const image = preview.result.image as Record<string, string> | undefined;
   const imageUrl = image && (image.kind === "url" || image.kind === "local") ? image.value : undefined;
   const titles = stringList(preview.result.titles);
-  return <div className="launch-preview-backdrop" role="presentation" onMouseDown={onClose}><section className="launch-preview-dialog" role="dialog" aria-modal="true" aria-label="出山生成预览" onMouseDown={(event) => event.stopPropagation()}><header><div><p className="eyebrow">生成预览 / 尚未归档</p><h2>{preview.template_type === "xiaohongshu" ? "线上图文生成" : "实体物料设计"}</h2></div><button className="modal-close" aria-label="关闭预览" onClick={onClose}>×</button></header><div className="launch-preview-content">{imageUrl && <figure><img src={imageUrl} alt="AI 概念预览" /><figcaption>AI 概念稿，不可直接印刷</figcaption></figure>}<article><p className="eyebrow">文字 Brief</p><p>{String(preview.result.brief ?? "")}</p>{preview.template_type === "xiaohongshu" && <><h3>标题提案</h3><ul>{titles.map((title) => <li key={title}>{title}</li>)}</ul><p>{String(preview.result.body ?? "")}</p></>}{preview.template_type === "peripheral" && <><h3>{String(preview.result.concept_title ?? "周边概念")}</h3><p>{stringList(preview.result.materials).join(" · ")}</p></>}</article></div><footer><small>确认保存后，它才会进入档案的「出山记录」。</small><div><button className="secondary-button" disabled={busy} onClick={onClose}>继续修改</button><button className="primary-button" disabled={busy} onClick={onSave}>{busy ? "正在保存…" : "保存到档案"}</button></div></footer></section></div>;
+  const warning = typeof preview.result.warning === "string" ? preview.result.warning : null;
+  return <div className="launch-preview-backdrop" role="presentation" onMouseDown={onClose}><section className="launch-preview-dialog" role="dialog" aria-modal="true" aria-label="出山生成预览" onMouseDown={(event) => event.stopPropagation()}><header><div><p className="eyebrow">生成预览 / 尚未归档</p><h2>{preview.template_type === "xiaohongshu" ? "线上图文生成" : "实体物料设计"}</h2></div><button className="modal-close" aria-label="关闭预览" onClick={onClose}>×</button></header>{preview.status === "partial" && warning && <p className="launch-preview-warning" role="status">{warning}</p>}<div className="launch-preview-content">{imageUrl && <figure><img src={imageUrl} alt="AI 概念预览" /><figcaption>AI 概念稿，不可直接印刷</figcaption></figure>}<article><p className="eyebrow">文字 Brief</p><p>{String(preview.result.brief ?? "")}</p>{preview.template_type === "xiaohongshu" && <><h3>标题提案</h3><ul>{titles.map((title) => <li key={title}>{title}</li>)}</ul><p>{String(preview.result.body ?? "")}</p></>}{preview.template_type === "peripheral" && <><h3>{String(preview.result.concept_title ?? "周边概念")}</h3><p>{stringList(preview.result.materials).join(" · ")}</p></>}</article></div><footer><small>确认保存后，它才会进入档案的「出山记录」。</small><div><button className="secondary-button" disabled={busy} onClick={onClose}>继续修改</button><button className="primary-button" disabled={busy} onClick={onSave}>{busy ? "正在保存…" : "保存到档案"}</button></div></footer></section></div>;
 }
 function StageHeader({ eyebrow, title, copy }: { eyebrow: string; title: string; copy: string }) { return <header className="page-header compact"><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{copy}</p></header>; }
 function Empty({ title, action, actionLabel = "开始" }: { title: string; action?: () => void; actionLabel?: string }) { return <div className="empty-state"><p>{title}</p>{action && <button className="secondary-button" onClick={action}>{actionLabel}</button>}</div>; }

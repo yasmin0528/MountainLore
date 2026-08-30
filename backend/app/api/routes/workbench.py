@@ -751,18 +751,32 @@ def run_generation_preview(preview_id: str) -> None:
     else:
         try:
             result = model_launch_copy(context, generation_input)
-            image = provider.generate_image(str(generation_input["image_prompt"]))
-            with connect() as connection:
-                result["image"] = persist_preview_image(connection, preview["project_id"], preview_id, image, str(generation_input["image_prompt"]))
-            status, error_code = "succeeded", None
         except ProviderError as exc:
             result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": str(exc)}, "failed", exc.code
         except (Base64Error, OSError, ValueError) as exc:
-            result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": "图片保存失败，请重试"}, "failed", "image_storage_failed"
-            logger.warning("Generation preview %s could not persist its image: %s", preview_id, exc)
+            result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": "文字概念稿生成失败，请重试"}, "failed", "generation_copy_failed"
+            logger.warning("Generation preview %s could not create its copy: %s", preview_id, exc)
         except Exception:
             result, status, error_code = {"warning": "AI 概念稿，不可直接印刷", "error_message": "生成服务出现异常，请重试"}, "failed", "generation_internal_error"
             logger.exception("Generation preview %s failed unexpectedly", preview_id)
+        else:
+            try:
+                image = provider.generate_image(str(generation_input["image_prompt"]))
+                with connect() as connection:
+                    result["image"] = persist_preview_image(connection, preview["project_id"], preview_id, image, str(generation_input["image_prompt"]))
+                status, error_code = "succeeded", None
+            except ProviderError as exc:
+                result = {**result, "warning": "文字概念稿已生成；配图生成失败，可先保存文字方案或稍后重试配图。", "image_error": str(exc)}
+                status, error_code = "partial", exc.code
+                logger.warning("Generation preview %s could not create its image: %s", preview_id, exc)
+            except (Base64Error, OSError, ValueError) as exc:
+                result = {**result, "warning": "文字概念稿已生成；配图保存失败，可先保存文字方案或稍后重试配图。", "image_error": "图片保存失败"}
+                status, error_code = "partial", "image_storage_failed"
+                logger.warning("Generation preview %s could not persist its image: %s", preview_id, exc)
+            except Exception:
+                result = {**result, "warning": "文字概念稿已生成；配图服务出现异常，可先保存文字方案或稍后重试配图。", "image_error": "图片服务出现异常"}
+                status, error_code = "partial", "image_generation_internal_error"
+                logger.exception("Generation preview %s image generation failed unexpectedly", preview_id)
     with connect() as connection:
         connection.execute(
             "UPDATE generation_previews SET result_json = ?, status = ?, error_code = ?, updated_at = ? WHERE id = ? AND status = 'running'",
@@ -814,7 +828,7 @@ def save_generation_preview(preview_id: str, visitor: Annotated[dict[str, Any], 
         if not preview:
             fail(404, "找不到这份生成预览", "preview_not_found")
         project_for_visitor(preview["project_id"], visitor)
-        if preview["status"] != "succeeded":
+        if preview["status"] not in {"succeeded", "partial"}:
             fail(409, "这份预览尚未成功生成，不能保存", "preview_not_ready")
         project = row_dict(connection.execute("SELECT * FROM projects WHERE id = ?", (preview["project_id"],)).fetchone())
         if project.get("launch_used", 0) >= 2:

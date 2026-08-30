@@ -339,3 +339,7 @@ body :is(h1,h2){font-family:var(--font-heading)!important;font-synthesis:none}
 .archive-modal-backdrop{z-index:1000}
 .archive-folio-dialog{max-height:calc(100dvh - 56px);overflow:auto}
 .auth-modal-backdrop{z-index:1000}
+
+/* A text-only preview remains usable when the image provider times out or fails. */
+.launch-preview-warning{margin:0;padding:12px 27px;border-bottom:1px dashed #d4c19e;background:#fbf2dc;color:#765b2d;font-size:12px;line-height:1.65}
+@media(max-width:760px){.launch-preview-warning{padding-right:20px;padding-left:20px}}

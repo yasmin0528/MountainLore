@@ -206,6 +206,34 @@ def test_generation_preview_persists_base64_image_as_authenticated_media(tmp_pat
     assert image.content == b"image-bytes"
 
 
+def test_generation_preview_keeps_copy_when_image_generation_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "preview-image-failure.db"))
+    monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
+    monkeypatch.setattr(settings, "ai_runtime_mode", "demo")
+    with TestClient(app) as client:
+        project_id, _ = _seed_confirmed_card(client)
+        route = client.post(f"/api/projects/{project_id}/directions", json={}).json()["data"]["routes"][0]
+        client.post(f"/api/directions/{route['id']}/select")
+        monkeypatch.setattr(settings, "ai_runtime_mode", "live")
+        monkeypatch.setattr(workbench_routes.provider, "chat_json", lambda **_kwargs: {"brief": "已生成的文字概念稿", "concept_title": "礼赠系统", "materials": ["纸材"]})
+
+        def unavailable_image(_prompt: str) -> dict[str, str]:
+            raise ProviderError("image_timeout", "图片任务超时，可重试")
+
+        monkeypatch.setattr(workbench_routes.provider, "generate_image", unavailable_image)
+        preview = client.post(
+            f"/api/projects/{project_id}/generation-previews",
+            json={"template_type": "peripheral", "inspiration_text": "山地果实的晨间能量", "material_ids": ["sticker"]},
+        ).json()["data"]
+        completed = client.get(f"/api/generation-previews/{preview['id']}").json()["data"]
+        saved = client.post(f"/api/generation-previews/{preview['id']}/save")
+    assert completed["status"] == "partial"
+    assert completed["error_code"] == "image_timeout"
+    assert completed["result"]["brief"] == "已生成的文字概念稿"
+    assert "配图生成失败" in completed["result"]["warning"]
+    assert saved.status_code == 200
+
+
 def test_generation_preview_uses_server_material_prompt_and_keeps_it_in_snapshot(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "prompt-preview.db"))
     monkeypatch.setattr(settings, "media_directory", str(tmp_path / "media"))
