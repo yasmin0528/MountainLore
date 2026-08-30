@@ -32,7 +32,7 @@ export type Job = { id: string; template_type: string; status: string; result: R
 type GenerationPreview = { id: string; template_type: "peripheral" | "xiaohongshu"; status: string; inspiration_text: string; result: Record<string, unknown> };
 type GenerationOverlayKind = "manual" | "manual_asset" | "launch";
 export type Workspace = { project: Project; session?: Session | null; archive_cards: ArchiveCard[]; claims?: Claim[]; directions: Direction[]; tasks?: WorkflowTask[]; manual?: { content: Record<string, unknown>; current_version_id?: string }; manual_versions?: ManualVersion[]; manual_assets?: ManualAsset[]; exports?: Array<{ id: string; format: string; download_url?: string }>; shares?: Array<{ id: string; revoked_at?: string; created_at: string }>; tide_searches: Tide[]; generation_jobs: Job[] };
-type Screen = "setup" | "interview" | "candidates" | "project-directory" | "archive" | "assets" | "chronicle" | "directions" | "manual" | "tide" | "launch";
+type Screen = "home" | "setup" | "interview" | "candidates" | "project-directory" | "archive" | "assets" | "chronicle" | "directions" | "manual" | "tide" | "launch";
 type SetupForm = { brand_name: string; industry: string; core_product: string; origin: string; category: string; consent: boolean };
 type TrialAnswer = { id: string; label: string; content: string };
 const TIDE_ACTIVITY_PATTERN = /活动|促销|展会|市集|直播|发布|上新|旅行|出行|露营|开箱|返乡|礼赠|福利|团建|赛事|庆典|快闪/;
@@ -72,6 +72,7 @@ const primaryScreens: Array<{ key: "fieldwork" | "tide" | "launch"; label: strin
   { key: "fieldwork", label: "采风", number: "01", icon: "⌁" }, { key: "tide", label: "观潮", number: "02", icon: "≈" }, { key: "launch", label: "出山", number: "03", icon: "↗" },
 ];
 const mobileScreenTitles: Record<Screen, string> = {
+  home: "首页",
   setup: "采风", interview: "采风", candidates: "采风", chronicle: "采风", directions: "采风", manual: "品牌手册",
   tide: "观潮", launch: "出山", "project-directory": "档案", archive: "档案", assets: "档案",
 };
@@ -118,7 +119,8 @@ export default function WorkbenchApp() {
   const [cultureResearchTask, setCultureResearchTask] = useState<WorkflowTask | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [projectDirectory, setProjectDirectory] = useState<Project[]>([]);
-  const [screen, setScreen] = useState<Screen>("setup");
+  // Deliberately start here on every document load; the workbench does not persist a screen.
+  const [screen, setScreen] = useState<Screen>("home");
   const [form, setForm] = useState<SetupForm>({ brand_name: "", industry: "刺梨", core_product: "", origin: "", category: "刺梨", consent: false });
   const [answer, setAnswer] = useState("");
   const [isTrialCase, setIsTrialCase] = useState(false);
@@ -466,6 +468,8 @@ export default function WorkbenchApp() {
     ? ["setup", "interview", "candidates", "chronicle", "directions", "manual"].includes(screen)
     : screen === key;
 
+  if (screen === "home") return <><HomePage onStart={() => { setIsTrialCase(false); setScreen("setup"); }} /><FailureToast message={error} onDismiss={() => setError(null)} /></>;
+
   return <div className="app-shell">
     {mobileNavOpen && <button type="button" className="mobile-nav-scrim" aria-label="关闭导航菜单" onClick={() => closeMobileNav()} />}
     <aside ref={mobileDrawerRef} id="mobile-workspace-navigation" className={`sidebar ${mobileNavOpen ? "is-mobile-open" : ""}`} aria-label="品牌工作台导航">
@@ -506,6 +510,12 @@ export default function WorkbenchApp() {
       {visibleGenerationOverlay && <GenerationLoading kind={visibleGenerationOverlay} />}
     </main><FailureToast message={error} onDismiss={() => setError(null)} />
   </div>;
+}
+
+function HomePage({ onStart }: { onStart: () => void }) {
+  return <main className="home-page">
+    <button type="button" className="home-start-button" onClick={onStart}>开始体验 <span aria-hidden="true">→</span></button>
+  </main>;
 }
 
 function GenerationLoading({ kind }: { kind: GenerationOverlayKind }) {
