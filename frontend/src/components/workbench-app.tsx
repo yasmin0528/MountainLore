@@ -582,17 +582,20 @@ function HomePage({ account, authStatus, onStart }: { account: Account | null; a
 }
 
 function GenerationLoading({ kind }: { kind: GenerationOverlayKind }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const content = kind === "launch"
     ? { eyebrow: "出山产物生成中", title: "正在把风物带到眼前", copy: "正在整理文案与画面，请稍候。" }
     : kind === "manual_asset"
       ? { eyebrow: "品牌手册生成中", title: "正在绘制视觉资产", copy: "正在提炼品牌的图形与色彩语言。" }
       : { eyebrow: "品牌手册生成中", title: "正在凝练品牌方向", copy: "正在依据已确认的品牌资料生成手册底稿。" };
-  return <div className="generation-loading" role="status" aria-live="polite" aria-label={content.title}>
+  const loader = <div className="generation-loading" role="status" aria-live="polite" aria-label={content.title}>
     <div className="generation-loading-card">
       <div className="generation-spinner" aria-hidden="true"><i /><i /><b>贵</b></div>
       <p className="eyebrow">{content.eyebrow}</p><h2>{content.title}</h2><p>{content.copy}</p>
     </div>
   </div>;
+  return mounted ? createPortal(loader, document.body) : null;
 }
 
 function AuthDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () => void; onSubmit: (mode: "login" | "register", email: string, password: string) => Promise<void> }) {

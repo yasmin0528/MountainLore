@@ -126,16 +126,22 @@ def recover_tasks() -> None:
 def retry_task(task_id: str) -> dict[str, Any] | None:
     with connect() as connection:
         task = row_dict(connection.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone())
-        if not task or task["status"] not in {"failed", "partial"} or not task["retriable"]:
+        # `retriable` controls automatic recovery. A user-initiated retry is
+        # still useful after a non-retriable provider problem (for example,
+        # after correcting an image key or account limit). The UI exposes this
+        # action for failed visual assets, so do not turn that action into a
+        # misleading 409 response.
+        if not task or task["status"] not in {"failed", "partial"}:
             return None
         connection.execute(
-            "UPDATE tasks SET status = 'queued', error_code = NULL, progress = 0, updated_at = ? WHERE id = ?",
+            "UPDATE tasks SET status = 'queued', error_code = NULL, progress = 0, retriable = 1, updated_at = ? WHERE id = ?",
             (now(), task_id),
         )
     submit_task(task_id)
     task["status"] = "queued"
     task["error_code"] = None
     task["progress"] = 0
+    task["retriable"] = 1
     return decode_record(task)
 
 
