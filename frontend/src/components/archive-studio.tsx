@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { api, createRequestId, encodeFileNameForHeader } from "@/lib/api";
 import type { ArchiveCard, Claim, Direction, ManualAsset, ManualVersion, Project, Workspace } from "@/components/workbench-app";
@@ -9,6 +9,11 @@ type ManualContent = Record<string, unknown>;
 
 const projectColors = ["#205d75", "#205d75", "#566f5c", "#7697a5"];
 const projectNames = ["赫章山野刺梨社", "都匀云雾茶 · 试验档", "黔北糟辣椒合作社", "凯里酸汤小作坊"];
+const subscribeToClient = () => () => undefined;
+
+function useIsClient() {
+  return useSyncExternalStore(subscribeToClient, () => true, () => false);
+}
 
 function routeContent(route?: Direction) { return (route?.content_json ?? route?.content ?? {}) as ManualContent; }
 function words(value: unknown) { return Array.isArray(value) ? value.map(String) : []; }
@@ -59,7 +64,7 @@ export function ArchiveFolioDialog({ project, cards, busy, onClose, onSave, onDe
   const active = cards.filter((card) => card.status === "active");
   const [selectedId, setSelectedId] = useState(active[0]?.id ?? "");
   const [draft, setDraft] = useState<ArchiveCard | null>(null);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useIsClient();
   const selected = active.find((card) => card.id === selectedId) ?? active[0];
   const selectedIndex = selected ? active.indexOf(selected) : 0;
   const editing = draft?.id === selected?.id;
@@ -68,7 +73,6 @@ export function ArchiveFolioDialog({ project, cards, busy, onClose, onSave, onDe
   function startEditing() { if (selected) setDraft({ ...selected }); }
   async function saveDraft() { if (draft && await onSave(draft)) setDraft(null); }
   function requestDelete() { if (selected) onDeleteRequest(selected); }
-  useEffect(() => { setMounted(true); }, []);
   const dialog = <div className="archive-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="archive-folio-dialog" role="dialog" aria-modal="true" aria-label={`${project.brand_name} 档案卡`}>
       <button className="folio-mobile-close" aria-label="关闭档案卡" onClick={onClose}>×</button>

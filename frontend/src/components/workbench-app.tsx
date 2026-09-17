@@ -2,7 +2,7 @@
 
 
 import Image from "next/image";
-import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError, createRequestId, encodeFileNameForHeader } from "@/lib/api";
 import { ArchiveFolioDialog, BrandMaterials, DirectionDraftDialog, ProjectDirectory } from "@/components/archive-studio";
@@ -36,6 +36,12 @@ export type Workspace = { project: Project; session?: Session | null; archive_ca
 type Screen = "home" | "setup" | "interview" | "candidates" | "project-directory" | "archive" | "assets" | "chronicle" | "directions" | "manual" | "tide" | "launch";
 type SetupForm = { brand_name: string; industry: string; core_product: string; origin: string; category: string; consent: boolean };
 type TrialAnswer = { id: string; label: string; content: string };
+const subscribeToClient = () => () => undefined;
+
+function useIsClient() {
+  return useSyncExternalStore(subscribeToClient, () => true, () => false);
+}
+
 const TIDE_ACTIVITY_PATTERN = /活动|促销|展会|市集|直播|发布|上新|旅行|出行|露营|开箱|返乡|礼赠|福利|团建|赛事|庆典|快闪/;
 function festivalDateRank(context: string) {
   const matched = context.match(/(20\d{2})[年\-\/.](\d{1,2})[月\-\/.](\d{1,2})/);
@@ -582,8 +588,7 @@ function HomePage({ account, authStatus, onStart }: { account: Account | null; a
 }
 
 function GenerationLoading({ kind }: { kind: GenerationOverlayKind }) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
+  const mounted = useIsClient();
   const content = kind === "launch"
     ? { eyebrow: "出山产物生成中", title: "正在把风物带到眼前", copy: "正在整理文案与画面，请稍候。" }
     : kind === "manual_asset"
@@ -603,8 +608,7 @@ function AuthDialog({ busy, onClose, onSubmit }: { busy: boolean; onClose: () =>
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
+  const mounted = useIsClient();
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setLocalError(null);
     try { await onSubmit(mode, email, password); } catch (caught) { setLocalError(errorText(caught)); }
